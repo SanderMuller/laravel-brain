@@ -24,6 +24,8 @@ class RouteDefinition
         public string $tabGroup = 'default',
         /** @var Node\Expr\Closure|Node\Expr\ArrowFunction|null Inline closure AST for closure routes */
         public ?Node $closureNode = null,
+        /** @var array<string,string>|null Use-map from the route file, needed to resolve short class names inside the closure */
+        public ?array $closureUseMap = null,
     ) {}
 }
 
@@ -333,6 +335,7 @@ class RouteAnalyzer
                     line: $node->getStartLine(),
                     tabGroup: strtoupper($method).' '.$fullUri,
                     closureNode: $closureNode,
+                    closureUseMap: $closureNode !== null ? $this->useMap : null,
                 );
             }
 
@@ -636,11 +639,24 @@ class RouteAnalyzer
                 if ($node instanceof Node\Scalar\String_) {
                     return [$node->value];
                 }
+                if ($node instanceof Node\Expr\ClassConstFetch) {
+                    $resolved = $this->extractClassRef($node);
+
+                    return $resolved !== '' ? [$resolved] : [];
+                }
                 if ($node instanceof Node\Expr\Array_) {
                     $result = [];
                     foreach ($node->items as $item) {
-                        if ($item && $item->value instanceof Node\Scalar\String_) {
+                        if (! $item) {
+                            continue;
+                        }
+                        if ($item->value instanceof Node\Scalar\String_) {
                             $result[] = $item->value->value;
+                        } elseif ($item->value instanceof Node\Expr\ClassConstFetch) {
+                            $resolved = $this->extractClassRef($item->value);
+                            if ($resolved !== '') {
+                                $result[] = $resolved;
+                            }
                         }
                     }
 

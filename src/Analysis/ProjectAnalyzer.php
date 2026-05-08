@@ -115,6 +115,25 @@ class ProjectAnalyzer
         $this->emit('step:start', ['step' => 'lifecycle', 'label' => 'Tracing full lifecycle', 'message' => '  → Tracing full lifecycle (deep)...']);
         $psr4Map = $this->controllerAnalyzer->getPsr4Map();
         $callChain = $this->methodTracer->trace($controllers, $psr4Map, $projectRoot);
+
+        // Trace closure routes (Route::get('/uri', function() { ... })) with the same scanner
+        foreach ($routes as $route) {
+            if ($route->closureNode === null) {
+                continue;
+            }
+            $callerFqcn = "route::{$route->method}::{$route->uri}";
+            $closureEdges = $this->methodTracer->traceClosure(
+                $route->closureNode,
+                $route->closureUseMap ?? [],
+                $callerFqcn,
+                $psr4Map,
+                $projectRoot,
+            );
+            foreach ($closureEdges as $edge) {
+                $callChain[] = $edge;
+            }
+        }
+
         $this->emit('step:done', ['step' => 'lifecycle', 'count' => count($callChain), 'unit' => 'call edge', 'message' => '    Discovered '.count($callChain).' call chain edge(s)']);
 
         $this->emit('step:start', ['step' => 'models', 'label' => 'Analyzing models', 'message' => '  → Analyzing models...']);

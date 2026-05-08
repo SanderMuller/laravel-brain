@@ -809,6 +809,11 @@ class GraphBuilder
             return $this->viewNodeId($fqcn);
         }
 
+        // Closure route virtual FQCN — the string IS the route node ID already
+        if (str_starts_with($fqcn, 'route::')) {
+            return $fqcn;
+        }
+
         // Controller action nodes use the existing format
         if ($this->isController($fqcn)) {
             return $this->actionId($fqcn, $method);

@@ -91,6 +91,53 @@ class MethodTracer
     }
 
     /**
+     * Trace an inline route closure and return all discovered CallChainEdges.
+     *
+     * Uses the same visitor as controller methods; discovered services/repos are recursed
+     * up to the standard depth cap. The virtual $callerFqcn (e.g. "route::GET::/uri")
+     * is written directly as the edge's callerFqcn so GraphBuilder can map it back to
+     * the already-existing route node via nodeIdForHop().
+     *
+     * @param  Node\Expr\Closure|Node\Expr\ArrowFunction  $closure
+     * @param  array<string,string>  $useMap       Import map from the file where the closure is defined
+     * @param  string  $callerFqcn                 Virtual FQCN — "route::{METHOD}::{uri}"
+     * @return CallChainEdge[]
+     */
+    public function traceClosure(
+        Node\Expr\Closure|Node\Expr\ArrowFunction $closure,
+        array $useMap,
+        string $callerFqcn,
+        array $psr4Map = [],
+        string $projectRoot = ''
+    ): array {
+        $this->psr4Map = $psr4Map;
+        $this->projectRoot = $projectRoot;
+
+        $discovered = $this->scanMethod($closure, [], $useMap, $callerFqcn, null);
+
+        $edges = [];
+        foreach ($discovered as $hop) {
+            $edges[] = new CallChainEdge(
+                callerFqcn: $callerFqcn,
+                callerMethod: '__invoke',
+                calleeFqcn: $hop['fqcn'],
+                calleeMethod: $hop['method'],
+                type: $hop['type'],
+                visibility: $hop['visibility'],
+            );
+
+            if (in_array($hop['type'], ['service', 'repository', 'action', 'mail', 'notification', 'abstract_class'], true)) {
+                $subEdges = $this->traceDeep($hop['fqcn'], $hop['method'], depth: 1);
+                foreach ($subEdges as $sub) {
+                    $edges[] = $sub;
+                }
+            }
+        }
+
+        return $edges;
+    }
+
+    /**
      * @param  ControllerDefinition[]  $controllers  keyed by FQCN
      * @param  array<string,string>  $psr4Map  namespace prefix => base path
      * @param  string  $projectRoot  root path for fallback file search
@@ -243,7 +290,7 @@ class MethodTracer
      *   [ ['fqcn'=>..., 'method'=>..., 'type'=>...], ... ]
      */
     private function scanMethod(
-        Node\Stmt\ClassMethod $ast,
+        Node $ast,
         array $varTypeMap,
         array $useMap,
         string $currentFqcn,
