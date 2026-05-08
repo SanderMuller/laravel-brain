@@ -98,9 +98,8 @@ class MethodTracer
      * is written directly as the edge's callerFqcn so GraphBuilder can map it back to
      * the already-existing route node via nodeIdForHop().
      *
-     * @param  Node\Expr\Closure|Node\Expr\ArrowFunction  $closure
-     * @param  array<string,string>  $useMap       Import map from the file where the closure is defined
-     * @param  string  $callerFqcn                 Virtual FQCN — "route::{METHOD}::{uri}"
+     * @param  array<string,string>  $useMap  Import map from the file where the closure is defined
+     * @param  string  $callerFqcn  Virtual FQCN — "route::{METHOD}::{uri}"
      * @return CallChainEdge[]
      */
     public function traceClosure(
