@@ -207,6 +207,7 @@ class ScanCommand extends Command
             $this->newLine();
             $this->line("  Open the viewer: <fg=cyan;options=bold>{$url}</>");
             $this->newLine();
+            $this->promptSupport($storageDir);
         } else {
             $elapsed = microtime(true) - $totalStart;
             $this->line(
@@ -281,6 +282,42 @@ class ScanCommand extends Command
         $this->line('  <fg=magenta;options=bold>┌─────────────────────────────────────────┐</>');
         $this->line('  <fg=magenta;options=bold>│</>  <fg=white;options=bold>Laravel Brain</>  <fg=gray>— project analysis</>       <fg=magenta;options=bold>│</>');
         $this->line('  <fg=magenta;options=bold>└─────────────────────────────────────────┘</>');
+    }
+
+    // ── Support prompt (shown once) ───────────────────────────────────────────
+
+    private function promptSupport(string $storageDir): void
+    {
+        $flagFile = $storageDir.'/.support-asked';
+
+        if (file_exists($flagFile)) {
+            return;
+        }
+
+        $this->line('  <fg=gray>─────────────────────────────────────────</>');
+        $this->newLine();
+        $this->line('  <fg=yellow;options=bold>💛 Enjoying Laravel Brain?</>');
+        $this->newLine();
+        $this->line('  Laravel Brain is free and open-source.');
+        $this->line('  If it saves you time, consider supporting the project:');
+        $this->newLine();
+
+        if ($this->confirm('  Would you like to open the GitHub page to star / sponsor the project?', false)) {
+            $this->newLine();
+            $this->line('  <fg=cyan;options=bold>https://github.com/laramint/laravel-brain</>');
+            $this->newLine();
+            $this->line('  <fg=gray>Thank you — it means a lot! 🙏</>');
+        } else {
+            $this->line('  <fg=gray>No problem! You can always find us at</>');
+            $this->line('  <fg=gray>https://github.com/laramint/laravel-brain</>');
+        }
+
+        $this->newLine();
+        $this->line('  <fg=gray>─────────────────────────────────────────</>');
+        $this->newLine();
+
+        // Write the flag so we never ask again
+        file_put_contents($flagFile, date('Y-m-d H:i:s'));
     }
 
     private function renderSummary(int $nodes, int $edges, int $routes, int $commands, int $channels, int $filamentResources, float $elapsed): void
