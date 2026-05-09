@@ -165,8 +165,11 @@ class ModelAnalyzer
         $data = json_decode(file_get_contents($composerJson), true);
         $map = [];
         foreach (['autoload', 'autoload-dev'] as $section) {
-            foreach ($data[$section]['psr-4'] ?? [] as $ns => $path) {
-                $map[rtrim($ns, '\\')] = rtrim($projectRoot.'/'.$path, '/');
+            foreach ($data[$section]['psr-4'] ?? [] as $ns => $paths) {
+                $key = rtrim($ns, '\\');
+                foreach ((array) $paths as $path) {
+                    $map[$key][] = rtrim($projectRoot.'/'.$path, '/');
+                }
             }
         }
 
@@ -175,11 +178,15 @@ class ModelAnalyzer
 
     private function resolveFile(string $fqcn, string $projectRoot, array $psr4Map): ?string
     {
-        foreach ($psr4Map as $namespace => $basePath) {
+        foreach ($psr4Map as $namespace => $basePaths) {
             if (str_starts_with($fqcn, $namespace.'\\')) {
-                $relative = substr($fqcn, strlen($namespace) + 1);
-
-                return $basePath.'/'.str_replace('\\', '/', $relative).'.php';
+                $relative = str_replace('\\', '/', substr($fqcn, strlen($namespace) + 1)).'.php';
+                foreach ((array) $basePaths as $basePath) {
+                    $filePath = $basePath.'/'.$relative;
+                    if (file_exists($filePath)) {
+                        return $filePath;
+                    }
+                }
             }
         }
 

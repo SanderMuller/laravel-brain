@@ -138,7 +138,7 @@ class MethodTracer
 
     /**
      * @param  ControllerDefinition[]  $controllers  keyed by FQCN
-     * @param  array<string,string>  $psr4Map  namespace prefix => base path
+     * @param  array<string,string[]>  $psr4Map  namespace prefix => list of base paths
      * @param  string  $projectRoot  root path for fallback file search
      * @return CallChainEdge[]
      */
@@ -945,11 +945,15 @@ class MethodTracer
 
     private function resolveFile(string $fqcn): ?string
     {
-        foreach ($this->psr4Map as $namespace => $basePath) {
+        foreach ($this->psr4Map as $namespace => $basePaths) {
             if (str_starts_with($fqcn, $namespace.'\\')) {
-                $relative = substr($fqcn, strlen($namespace) + 1);
-
-                return $basePath.'/'.str_replace('\\', '/', $relative).'.php';
+                $relative = str_replace('\\', '/', substr($fqcn, strlen($namespace) + 1)).'.php';
+                foreach ((array) $basePaths as $basePath) {
+                    $filePath = $basePath.'/'.$relative;
+                    if (file_exists($filePath)) {
+                        return $filePath;
+                    }
+                }
             }
         }
 

@@ -54,7 +54,7 @@ class QueryTracer
      *
      * @param  CallChainEdge[]  $callChain
      * @param  array<string, ControllerDefinition>  $controllers
-     * @param  array<string, string>  $psr4Map
+     * @param  array<string, string[]>  $psr4Map
      * @return array<string, DbQuery[]> "Fqcn::method" => queries
      */
     public function buildQueryMap(
@@ -213,12 +213,14 @@ class QueryTracer
 
     private function resolveFile(string $fqcn, array $psr4Map, string $projectRoot): ?string
     {
-        foreach ($psr4Map as $namespace => $basePath) {
+        foreach ($psr4Map as $namespace => $basePaths) {
             if (str_starts_with($fqcn, $namespace.'\\')) {
-                $relative = substr($fqcn, strlen($namespace) + 1);
-                $path = $basePath.'/'.str_replace('\\', '/', $relative).'.php';
-                if (file_exists($path)) {
-                    return $path;
+                $relative = str_replace('\\', '/', substr($fqcn, strlen($namespace) + 1)).'.php';
+                foreach ((array) $basePaths as $basePath) {
+                    $path = $basePath.'/'.$relative;
+                    if (file_exists($path)) {
+                        return $path;
+                    }
                 }
             }
         }
