@@ -547,8 +547,11 @@ class ControllerAnalyzer
         $map = [];
 
         foreach (['autoload', 'autoload-dev'] as $section) {
-            foreach ($data[$section]['psr-4'] ?? [] as $namespace => $path) {
-                $map[rtrim($namespace, '\\')] = rtrim($projectRoot.'/'.$path, '/');
+            foreach ($data[$section]['psr-4'] ?? [] as $namespace => $paths) {
+                $ns = rtrim($namespace, '\\');
+                foreach ((array) $paths as $path) {
+                    $map[$ns][] = rtrim($projectRoot.'/'.$path, '/');
+                }
             }
         }
 
@@ -570,10 +573,11 @@ class ControllerAnalyzer
                 if (file_exists($modComposer)) {
                     $modData = json_decode(file_get_contents($modComposer), true);
                     foreach (['autoload', 'autoload-dev'] as $section) {
-                        foreach ($modData[$section]['psr-4'] ?? [] as $namespace => $path) {
+                        foreach ($modData[$section]['psr-4'] ?? [] as $namespace => $paths) {
                             $ns = rtrim($namespace, '\\');
-                            // Resolve path relative to module root
-                            $map[$ns] = rtrim($modPath.'/'.$path, '/');
+                            foreach ((array) $paths as $path) {
+                                $map[$ns][] = rtrim($modPath.'/'.$path, '/');
+                            }
                         }
                     }
                 }
@@ -584,9 +588,9 @@ class ControllerAnalyzer
                 if (! isset($map[$ns])) {
                     // New nwidart structure: Modules/{Name}/app/
                     if (is_dir($modPath.'/app')) {
-                        $map[$ns] = $modPath.'/app';
+                        $map[$ns] = [$modPath.'/app'];
                     } else {
-                        $map[$ns] = $modPath;
+                        $map[$ns] = [$modPath];
                     }
                 }
             }
@@ -597,13 +601,15 @@ class ControllerAnalyzer
 
     private function resolveFile(string $fqcn, string $projectRoot): ?string
     {
-        foreach ($this->psr4Map as $namespace => $basePath) {
+        foreach ($this->psr4Map as $namespace => $basePaths) {
             if (str_starts_with($fqcn, $namespace.'\\')) {
                 $relative = substr($fqcn, strlen($namespace) + 1);
-                $filePath = $basePath.'/'.str_replace('\\', '/', $relative).'.php';
-
-                if (file_exists($filePath)) {
-                    return $filePath;
+                $relativeFile = str_replace('\\', '/', $relative).'.php';
+                foreach ((array) $basePaths as $basePath) {
+                    $filePath = $basePath.'/'.$relativeFile;
+                    if (file_exists($filePath)) {
+                        return $filePath;
+                    }
                 }
             }
         }
