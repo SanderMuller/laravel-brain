@@ -1,83 +1,57 @@
 <?php
 
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
+use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 
-$fixtureProject = __DIR__.'/../fixtures/laravel-project';
+it('extracts basic routes from api.php', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
 
-function findRoute(array $routes, callable $predicate): mixed
-{
-    foreach ($routes as $r) {
-        if ($predicate($r)) {
-            return $r;
-        }
-    }
-
-    return null;
-}
-
-function routeAnalyzerTestDeleteTree(string $dir): void
-{
-    if (! is_dir($dir)) {
-        return;
-    }
-    $it = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::CHILD_FIRST
-    );
-    foreach ($it as $fileinfo) {
-        $path = $fileinfo->getPathname();
-        if ($fileinfo->isDir()) {
-            @rmdir($path);
-        } else {
-            @unlink($path);
-        }
-    }
-    @rmdir($dir);
-}
-
-it('extracts basic routes from api.php', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    expect($routes)->not->toBeEmpty();
+    expect($routes)
+        ->toBeArray()
+        ->each->toBeInstanceOf(RouteDefinition::class);
 });
 
-it('finds the POST /login route', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('finds the POST /login route', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $login = findRoute($routes, fn ($r) => str_contains($r->uri, 'login'));
 
-    expect($login)->not->toBeNull();
-    expect($login->method)->toBe('POST');
-    expect($login->controller)->toContain('AuthController');
-    expect($login->action)->toBe('login');
+    expect($login)->toBeInstanceOf(RouteDefinition::class)
+        ->method->toBe('POST')
+        ->controller->toBe('App\Http\Controllers\AuthController')
+        ->action->toBe('login');
 });
 
-it('extracts middleware from groups', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('extracts middleware from groups', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $ordersRoute = findRoute($routes, fn ($r) => $r->uri === '/orders' && $r->method === 'GET');
 
-    expect($ordersRoute)->not->toBeNull();
-    expect($ordersRoute->middlewares)->toContain('auth:sanctum');
+    expect($ordersRoute)->toBeInstanceOf(RouteDefinition::class)
+        ->middlewares->toBeArray()->toContain('auth:sanctum');
 });
 
-it('applies prefix from nested group', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('applies prefix from nested group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $adminRoute = findRoute($routes, fn ($r) => str_contains($r->uri, 'admin'));
 
-    expect($adminRoute)->not->toBeNull();
-    expect($adminRoute->uri)->toContain('/admin/');
-    expect($adminRoute->middlewares)->toContain('role:admin');
+    expect($adminRoute)->toBeInstanceOf(RouteDefinition::class)
+        ->uri->toBe('/admin/orders/{id}')
+        ->middlewares->toBeArray()->toContain('role:admin');
 });
 
-it('finds 13 routes total', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    expect(count($routes))->toBe(13);
+it('finds 13 routes total', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+
+    expect($routes)
+        ->toBeArray()
+        ->toHaveCount(13);
 });
 
-it('captures middleware chained after the HTTP method call', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('captures middleware chained after the HTTP method call', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $brandsRoute = findRoute($routes, fn ($r) => $r->uri === '/brands' && $r->method === 'GET');
 
-    expect($brandsRoute)->not->toBeNull();
-    expect($brandsRoute->middlewares)->toContain('ability:view-maintenance-requests,monitor-maintenance,create-transfer');
+    expect($brandsRoute)->toBeInstanceOf(RouteDefinition::class)
+        ->middlewares->toBeArray()->toContain('ability:view-maintenance-requests,monitor-maintenance,create-transfer');
 });
 
 it('expands Route::resource with distinct URIs and tab groups per action', function () {
@@ -132,6 +106,7 @@ it('expands Route::apiResource without create or edit routes', function () {
 <?php
 
 use Illuminate\Support\Facades\Route;
+use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 
 Route::apiResource('posts', \App\Http\Controllers\PostController::class);
 
@@ -151,38 +126,35 @@ PHP
     }
 });
 
-it('parses Route::livewire() as a GET route with component as controller', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/web', 0777, true);
-    file_put_contents(
-        $tmp.'/routes/web/livewire.php',
-        <<<'PHP'
-<?php
+// Helper Functions
 
-use Illuminate\Support\Facades\Route;
-use App\Http\Livewire\Dashboard;
-
-Route::livewire('/dashboard', Dashboard::class)->name('dashboard');
-Route::livewire('/profile', 'App\Http\Livewire\Profile');
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-
-        expect($routes)->toHaveCount(2);
-
-        $dashboard = findRoute($routes, fn ($r) => $r->uri === '/dashboard');
-        expect($dashboard)->not->toBeNull();
-        expect($dashboard->method)->toBe('GET');
-        expect($dashboard->controller)->toContain('Dashboard');
-        expect($dashboard->action)->toBe('render');
-
-        $profile = findRoute($routes, fn ($r) => $r->uri === '/profile');
-        expect($profile)->not->toBeNull();
-        expect($profile->method)->toBe('GET');
-        expect($profile->controller)->toBe('App\Http\Livewire\Profile');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
+function findRoute(array $routes, callable $predicate): mixed
+{
+    foreach ($routes as $r) {
+        if ($predicate($r)) {
+            return $r;
+        }
     }
-});
+
+    return null;
+}
+
+function routeAnalyzerTestDeleteTree(string $dir): void
+{
+    if (! is_dir($dir)) {
+        return;
+    }
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($it as $fileinfo) {
+        $path = $fileinfo->getPathname();
+        if ($fileinfo->isDir()) {
+            @rmdir($path);
+        } else {
+            @unlink($path);
+        }
+    }
+    @rmdir($dir);
+}

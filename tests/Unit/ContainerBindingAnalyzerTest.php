@@ -4,14 +4,12 @@ declare(strict_types=1);
 
 use LaraMint\LaravelBrain\Analysis\ContainerBindingAnalyzer;
 
-$fixtureProject = __DIR__.'/../fixtures/laravel-project';
-
-it('extracts singleton bindings from fixture AppServiceProvider', function () use ($fixtureProject) {
-    $registry = (new ContainerBindingAnalyzer)->analyze($fixtureProject);
+it('extracts singleton bindings from fixture AppServiceProvider', function () {
+    $registry = (new ContainerBindingAnalyzer)->analyze(fixture('laravel-project'));
     $rec = $registry->get('App\Contracts\ThingRepositoryInterface');
 
-    expect($rec)->not->toBeNull();
-    expect($rec->concreteFqcn)->toBe('App\Repositories\SqlThingRepository');
-    expect($rec->providerFqcn)->toBe('App\Providers\AppServiceProvider');
-    expect($rec->kind)->toBe('singleton');
+    expect($rec)
+        ->concreteFqcn->toBe('App\Repositories\SqlThingRepository')
+        ->providerFqcn->toBe('App\Providers\AppServiceProvider')
+        ->kind->toBe('singleton');
 });
