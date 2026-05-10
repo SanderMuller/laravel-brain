@@ -130,6 +130,58 @@ export const BG_COLORS_LIGHT: Record<string, string> = {
 
 export const HIGHLIGHT_COLOR = '#8B6FE8'
 
+// ── Security Surface Map ─────────────────────────────────────────────────────
+
+/**
+ * Route exposure level:
+ *   public  – no auth required          (red — danger)
+ *   guest   – redirects authed users    (amber — caution)
+ *   authed  – requires authentication   (emerald — safe)
+ *   admin   – elevated permission       (violet — restricted)
+ */
+export const SECURITY_EXPOSURE_COLORS: Record<string, { bg: string; border: string; accent: string; label: string }> = {
+  public: { bg: '#1c0808', border: '#ef4444', accent: '#f87171', label: 'Public'  },
+  guest:  { bg: '#1c1408', border: '#f59e0b', accent: '#fbbf24', label: 'Guest'   },
+  authed: { bg: '#081c10', border: '#10b981', accent: '#34d399', label: 'Auth'    },
+  admin:  { bg: '#110c1c', border: '#8b5cf6', accent: '#a78bfa', label: 'Admin'   },
+}
+
+export const SECURITY_EXPOSURE_COLORS_LIGHT: Record<string, { bg: string; border: string; accent: string; label: string }> = {
+  public: { bg: '#fff1f2', border: '#ef4444', accent: '#dc2626', label: 'Public'  },
+  guest:  { bg: '#fffbeb', border: '#f59e0b', accent: '#d97706', label: 'Guest'   },
+  authed: { bg: '#ecfdf5', border: '#10b981', accent: '#059669', label: 'Auth'    },
+  admin:  { bg: '#f5f3ff', border: '#8b5cf6', accent: '#7c3aed', label: 'Admin'   },
+}
+
+/** Risk-level severity badge colors (dark mode) */
+export const SECURITY_RISK_COLORS: Record<string, string> = {
+  none:     '#6b7280',
+  low:      '#10b981',
+  medium:   '#f59e0b',
+  high:     '#f97316',
+  critical: '#ef4444',
+}
+
+/** Map severity → readable label */
+export const SECURITY_SEVERITY_LABELS: Record<string, string> = {
+  none:     'No Issues',
+  low:      'Low',
+  medium:   'Medium',
+  high:     'High',
+  critical: 'Critical',
+}
+
+/** Issue type → icon + readable name */
+export const SECURITY_ISSUE_META: Record<string, { icon: string; name: string }> = {
+  MASS_ASSIGNMENT:    { icon: '⚡', name: 'Mass Assignment'      },
+  UNVALIDATED_INPUT:  { icon: '⚠️', name: 'Unvalidated Input'   },
+  MISSING_THROTTLE:   { icon: '🔓', name: 'Missing Throttle'    },
+  PUBLIC_WRITE:       { icon: '🌐', name: 'Public Write'         },
+  XSS_DIRECT_OUTPUT:  { icon: '💉', name: 'XSS — Direct Output' },
+  XSS_HTML_DECODE:    { icon: '🔓', name: 'XSS — HTML Decode'   },
+  XSS_BLADE_UNESCAPED:{ icon: '📄', name: 'XSS — Blade {!! !!}' },
+}
+
 export const CC_TIERS = [
   { label: 'Low',      min: 1,  max: 5,        fill: '#0d2e1a', border: '#4ade80' },
   { label: 'Moderate', min: 6,  max: 10,       fill: '#2e2200', border: '#facc15' },

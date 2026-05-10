@@ -1,5 +1,6 @@
-import { useMemo, useRef, useCallback, useState } from 'react'
+import React, { useMemo, useRef, useCallback, useState } from 'react'
 import type { GraphData, GraphNode, GraphEdge, FlowStep, DbQuery } from '../types/graph'
+import { SECURITY_EXPOSURE_COLORS, SECURITY_RISK_COLORS, SECURITY_ISSUE_META, SECURITY_SEVERITY_LABELS } from '../utils/graphConstants'
 import { FlowchartView } from './FlowchartView'
 import { FlowchartModal } from './FlowchartModal'
 import { SourceView } from './SourceView'
@@ -52,7 +53,7 @@ const TYPE_COLORS: Record<string, string> = {
   filament_relation_manager: '#0891B2',
 }
 
-type TabId = 'info' | 'flow' | 'source' | 'edges' | 'stress'
+type TabId = 'info' | 'flow' | 'source' | 'edges' | 'stress' | 'security'
 
 export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange }: Props) {
   const [width, setWidth] = useState(DEFAULT_WIDTH)
@@ -234,12 +235,14 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
       key !== 'metrics' &&
       key !== 'fatMethod' &&
       key !== 'fatClass' &&
+      key !== 'hasN1' &&
       key !== 'classMetrics' &&
       key !== 'dbQueries' &&
       key !== 'relationships' &&
       key !== 'params' &&
       key !== 'members' &&
       key !== 'validationRules' &&
+      key !== 'security' &&
       !(Array.isArray(val) && val.length === 0)
   )
 
@@ -253,15 +256,22 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
     (activeTab === 'flow' && !hasFlow) ||
     (activeTab === 'source' && !hasSource) ||
     (activeTab === 'edges' && !hasEdges) ||
-    (activeTab === 'stress' && !isRoute)
+    (activeTab === 'stress' && !isRoute) ||
+    (activeTab === 'security' && !isRoute)
       ? 'info'
       : activeTab
+
+  const securityData = isRoute && node.data?.security
+    ? node.data.security as { exposure: string; riskLevel: string; issues: Array<{ type: string; severity: string; message: string; file: string | null; line: number | null }> }
+    : null
+  const securityIssueCount = securityData ? securityData.issues.length : 0
 
   const tabs: { id: TabId; label: string; count?: number; title: string }[] = [
     { id: 'info', label: 'Info', title: 'Identity, type, smells, and code metrics (lines, cyclomatic complexity, …).' },
     ...(hasFlow ? [{ id: 'flow' as TabId, label: 'Flow', title: 'Control-flow steps through this method or request (and sequence diagram for routes).' }] : []),
     ...(hasSource ? [{ id: 'source' as TabId, label: 'Source', title: 'Syntax-highlighted PHP source around this symbol.' }] : []),
     ...(hasEdges ? [{ id: 'edges' as TabId, label: 'Edges', count: incomingEdges.length + outgoingEdges.length, title: 'What calls or references this node (incoming) and what it calls (outgoing).' }] : []),
+    ...(isRoute ? [{ id: 'security' as TabId, label: '🔒 Security', count: securityIssueCount || undefined, title: 'Security surface analysis: exposure level, authentication, rate-limiting, mass-assignment, and unvalidated input risks.' }] : []),
     ...(isRoute ? [{ id: 'stress' as TabId, label: 'Stress', title: 'Send HTTP requests against this route and inspect responses (dev only).' }] : []),
   ]
 
@@ -337,6 +347,31 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
             )}
           </div>
         )}
+
+        {/* Security exposure badge (route nodes only) */}
+        {(() => {
+          if (node.type !== 'route' || !node.data?.security) return null
+          type SecData = { exposure: string; riskLevel: string; issues: Array<{ type: string; severity: string; message: string; file: string | null; line: number | null }> }
+          const sec = node.data.security as SecData
+          const palette = SECURITY_EXPOSURE_COLORS[sec.exposure] ?? SECURITY_EXPOSURE_COLORS['public']
+          const riskColor = SECURITY_RISK_COLORS[sec.riskLevel] ?? SECURITY_RISK_COLORS['none']
+          return (
+            <div className="sidebar-smells">
+              <Tooltip content={`Authentication exposure: this route is ${sec.exposure === 'public' ? 'publicly accessible with no auth' : sec.exposure === 'guest' ? 'only for unauthenticated users' : sec.exposure === 'authed' ? 'protected by auth middleware' : 'restricted to admin/elevated permissions'}`}>
+                <span className="smell-badge" style={{ background: palette.border + '22', color: palette.accent, borderColor: palette.border }}>
+                  🔒 {palette.label}
+                </span>
+              </Tooltip>
+              {sec.riskLevel !== 'none' && (
+                <Tooltip content={`${sec.issues.length} security issue(s) detected — see the Security tab for details.`}>
+                  <span className="smell-badge" style={{ background: riskColor + '22', color: riskColor, borderColor: riskColor }}>
+                    ⚠ {SECURITY_SEVERITY_LABELS[sec.riskLevel]} Risk
+                  </span>
+                </Tooltip>
+              )}
+            </div>
+          )
+        })()}
 
         {/* Tab bar */}
         <div className="sidebar-tab-bar">
@@ -635,6 +670,79 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                 </div>
               )}
             </>
+          )}
+
+          {/* ── Security tab ── */}
+          {safeTab === 'security' && isRoute && securityData && (
+            <div className="sidebar-section sidebar-section--security">
+              {/* Exposure Level */}
+              {(() => {
+                const palette = SECURITY_EXPOSURE_COLORS[securityData.exposure] ?? SECURITY_EXPOSURE_COLORS['public']
+                const exposureDescriptions: Record<string, string> = {
+                  public:  'This route is publicly accessible — no authentication middleware detected.',
+                  guest:   'This route is for unauthenticated users and redirects authenticated ones away.',
+                  authed:  'This route requires authentication (auth / sanctum / jwt / passport).',
+                  admin:   'This route requires elevated permissions (can:, role:, permission:, ability:, gate:).',
+                }
+                return (
+                  <div className="security-exposure-card" style={{ borderColor: palette.border, background: palette.bg + '88' }}>
+                    <div className="security-exposure-header">
+                      <span className="security-exposure-badge" style={{ color: palette.accent }}>
+                        🔒 {palette.label} Route
+                      </span>
+                    </div>
+                    <p className="security-exposure-desc">
+                      {exposureDescriptions[securityData.exposure] ?? exposureDescriptions['public']}
+                    </p>
+                  </div>
+                )
+              })()}
+
+              {/* Issue List */}
+              {securityData.issues.length === 0 ? (
+                <div className="security-clean">
+                  <span style={{ color: SECURITY_RISK_COLORS['none'] }}>✓</span> No security issues detected on this route.
+                </div>
+              ) : (
+                <>
+                  <div className="security-issues-title">
+                    {securityData.issues.length} Issue{securityData.issues.length !== 1 ? 's' : ''} Detected
+                  </div>
+                  {securityData.issues.map((issue, i) => {
+                    const meta = SECURITY_ISSUE_META[issue.type] ?? { icon: '•', name: issue.type }
+                    const riskColor = SECURITY_RISK_COLORS[issue.severity] ?? SECURITY_RISK_COLORS['medium']
+                    return (
+                      <div key={i} className="security-issue-card" style={{ borderLeftColor: riskColor }}>
+                        <div className="security-issue-header">
+                          <span className="security-issue-icon">{meta.icon}</span>
+                          <span className="security-issue-name" style={{ color: riskColor }}>{meta.name}</span>
+                          <span className="security-issue-severity" style={{ color: riskColor }}>
+                            {issue.severity.toUpperCase()}
+                          </span>
+                        </div>
+                        <p className="security-issue-message">{issue.message}</p>
+                        {issue.file && (
+                          <div className="security-issue-location">
+                            <span className="prop-key">file</span>
+                            <span className="prop-val" title={issue.file}>
+                              …{issue.file.split('/').slice(-2).join('/')}
+                              {issue.line ? `:${issue.line}` : ''}
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })}
+                </>
+              )}
+            </div>
+          )}
+
+          {/* ── Security tab (no data) ── */}
+          {safeTab === 'security' && isRoute && !securityData && (
+            <div className="sidebar-section">
+              <p style={{ opacity: 0.6, fontSize: 13 }}>Security data not available. Re-run <code>brain:scan</code> to generate it.</p>
+            </div>
           )}
 
           {/* ── Stress tab ── */}

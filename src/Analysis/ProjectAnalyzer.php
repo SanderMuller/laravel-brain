@@ -47,6 +47,8 @@ class ProjectAnalyzer
 
     private QueryTracer $queryTracer;
 
+    private SecurityAnalyzer $securityAnalyzer;
+
     private GraphBuilder $graphBuilder;
 
     private GraphSplitter $graphSplitter;
@@ -75,6 +77,7 @@ class ProjectAnalyzer
         $this->modelAnalyzer = new ModelAnalyzer;
         $this->filamentAnalyzer = new FilamentAnalyzer;
         $this->queryTracer = new QueryTracer;
+        $this->securityAnalyzer = new SecurityAnalyzer;
         $this->graphBuilder = new GraphBuilder;
         $livewirePaths = config('laravel-brain.livewire.component_paths', []);
         if (is_array($livewirePaths) && $livewirePaths !== []) {
@@ -208,6 +211,11 @@ class ProjectAnalyzer
         $dbQueryMap = $this->queryTracer->buildQueryMap($callChain, $controllers, $psr4Map, $projectRoot);
         $this->emit('step:done', ['step' => 'queries', 'count' => count($dbQueryMap), 'unit' => 'action', 'message' => '    Found DB query info for '.count($dbQueryMap).' action(s)']);
 
+        $this->emit('step:start', ['step' => 'security', 'label' => 'Security surface map', 'message' => '  → Building security surface map...']);
+        $securityMap = $this->securityAnalyzer->analyze($routes, $middlewareRegistry, $controllers, $projectRoot);
+        $issueCount = array_sum(array_map(fn ($r) => count($r['issues']), $securityMap));
+        $this->emit('step:done', ['step' => 'security', 'count' => $issueCount, 'unit' => 'issue', 'message' => "    Found {$issueCount} security issue(s) across ".count($securityMap).' route(s)']);
+
         $this->emit('step:start', ['step' => 'container_bindings', 'label' => 'Scanning service providers', 'message' => '  → Scanning service providers (IoC bindings)...']);
         $bindingRegistry = (new ContainerBindingAnalyzer)->analyze($projectRoot);
         $bindingCount = count($bindingRegistry->all());
@@ -227,7 +235,7 @@ class ProjectAnalyzer
 
         $this->emit('step:start', ['step' => 'graph', 'label' => 'Building graph', 'message' => '  → Building graph...']);
         $fullGraph = $this->graphBuilder->build(
-            $projectName, $routes, $middlewareRegistry, $controllers, $callChain, $models, $projectRoot, $dbQueryMap, $bindingRegistry, $facadeRegistry,
+            $projectName, $routes, $middlewareRegistry, $controllers, $callChain, $models, $projectRoot, $dbQueryMap, $bindingRegistry, $facadeRegistry, $securityMap,
         );
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);

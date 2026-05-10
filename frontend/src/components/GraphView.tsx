@@ -12,6 +12,9 @@ import {
   HIGHLIGHT_COLOR,
   CC_TIERS,
   CC_TIERS_LIGHT,
+  SECURITY_EXPOSURE_COLORS,
+  SECURITY_EXPOSURE_COLORS_LIGHT,
+  SECURITY_RISK_COLORS,
 } from '../utils/graphConstants'
 import {
   type LayoutEdge,
@@ -224,6 +227,7 @@ function cardColors(
   complexityOverlay: boolean,
   selected: boolean,
   stN: boolean,
+  securityOverlay: boolean,
 ): { bg: string; border: string; borderW: number; accent: string } {
   const type = String(n.data.type ?? '')
   const accent = dark
@@ -239,6 +243,18 @@ function cardColors(
     const tier = tiers.find((t) => cc >= t.min && cc <= t.max) ?? tiers[0]
     const border = stN ? '#a855f7' : n.data.hasN1 ? '#F44336' : tier.border
     return { bg: tier.fill, border, borderW: 1.5, accent: tier.border }
+  }
+
+  // Security overlay: colour route nodes by exposure level
+  if (securityOverlay && type === 'route') {
+    const sec = n.data.security as { exposure: string; riskLevel: string } | undefined
+    if (sec) {
+      const exposureMap = dark ? SECURITY_EXPOSURE_COLORS : SECURITY_EXPOSURE_COLORS_LIGHT
+      const palette = exposureMap[sec.exposure] ?? exposureMap['public']
+      const riskColor = SECURITY_RISK_COLORS[sec.riskLevel] ?? SECURITY_RISK_COLORS['none']
+      const border = selected ? accent : stN ? '#a855f7' : sec.riskLevel !== 'none' ? riskColor : palette.border
+      return { bg: palette.bg, border, borderW: selected || sec.riskLevel !== 'none' ? 2 : 1.5, accent: palette.accent }
+    }
   }
 
   let border = dark ? 'rgba(255,255,255,0.1)' : 'rgba(0,0,0,0.12)'
@@ -264,6 +280,7 @@ interface Props {
   stressTestNodeId?: string | null
   stressRunKey?: number
   complexityOverlay: boolean
+  securityOverlay?: boolean
   compact?: boolean
 }
 
@@ -279,6 +296,7 @@ export function GraphView({
   stressTestNodeId,
   stressRunKey,
   complexityOverlay,
+  securityOverlay = false,
   compact = false,
 }: Props) {
   const dark = theme === 'dark'
@@ -593,7 +611,7 @@ export function GraphView({
         })
       }, delay)
     },
-    [edges, edgeVisible, rankDir],
+    [edges, edgeVisible],
   )
 
   const spawnChainFromNode = useCallback(
@@ -1088,7 +1106,7 @@ export function GraphView({
             const opacity = !typeOk ? 0 : nodeDim ? 0.07 : 1
             const stN = stressSets.nodes.has(n.id)
             const selected = selectedNodeId === n.id
-            const { bg, border, borderW, accent } = cardColors(n, dark, complexityOverlay, selected, stN)
+            const { bg, border, borderW, accent } = cardColors(n, dark, complexityOverlay, selected, stN, securityOverlay)
 
             const rawLabel = String(n.data.label ?? n.id)
             const { className, method } = splitNodeLabel(rawLabel, n.data.method as string | undefined)
@@ -1148,6 +1166,21 @@ export function GraphView({
                         N+1
                       </text>
                     )}
+                    {/* Security exposure badge (compact) */}
+                    {securityOverlay && n.data.security && (
+                      <text
+                        x={n.data.hasN1 ? hw - 28 : hw - 6}
+                        y={0}
+                        fontSize={8}
+                        textAnchor="end"
+                        fontFamily="ui-monospace, monospace"
+                        fill={(SECURITY_EXPOSURE_COLORS[(n.data.security as { exposure: string }).exposure] ?? SECURITY_EXPOSURE_COLORS['public']).accent}
+                        dominantBaseline="middle"
+                        style={{ pointerEvents: 'none' }}
+                      >
+                        {(SECURITY_EXPOSURE_COLORS[(n.data.security as { exposure: string }).exposure] ?? SECURITY_EXPOSURE_COLORS['public']).label.toUpperCase()}
+                      </text>
+                    )}
                   </>
                 ) : (
                   <>
@@ -1169,6 +1202,30 @@ export function GraphView({
                         N+1
                       </text>
                     )}
+
+                    {/* Security exposure badge (full mode) */}
+                    {securityOverlay && n.data.security && (() => {
+                      const sec = n.data.security as { exposure: string; riskLevel: string; issues: unknown[] }
+                      const palette = SECURITY_EXPOSURE_COLORS[sec.exposure] ?? SECURITY_EXPOSURE_COLORS['public']
+                      const riskColor = SECURITY_RISK_COLORS[sec.riskLevel] ?? SECURITY_RISK_COLORS['none']
+                      const badgeX = n.data.hasN1 ? hw - 42 : hw - 10
+                      return (
+                        <>
+                          <text x={badgeX} y={-hh + 22} fontSize={9} textAnchor="end"
+                            fontFamily="ui-monospace, monospace" fill={palette.accent}
+                            style={{ pointerEvents: 'none' }}>
+                            🔒 {palette.label.toUpperCase()}
+                          </text>
+                          {sec.riskLevel !== 'none' && (
+                            <text x={hw - 10} y={-hh + 38} fontSize={8} textAnchor="end"
+                              fontFamily="ui-monospace, monospace" fill={riskColor}
+                              style={{ pointerEvents: 'none' }}>
+                              ⚠ {sec.issues.length} issue{sec.issues.length !== 1 ? 's' : ''}
+                            </text>
+                          )}
+                        </>
+                      )
+                    })()}
 
                     {/* Class name */}
                     <text x={-hw + 14} y={-hh + 46} fontSize={13} fontWeight={700}
@@ -1246,6 +1303,32 @@ export function GraphView({
               <span className="cc-legend-range">
                 {tier.max === Infinity ? `≥${tier.min}` : `${tier.min}–${tier.max}`}
               </span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {securityOverlay && (
+        <div className="cc-legend">
+          <div className="cc-legend-title">🔒 Security Surface</div>
+          {Object.entries(SECURITY_EXPOSURE_COLORS).map(([key, palette]) => (
+            <div key={key} className="cc-legend-row">
+              <span className="cc-legend-swatch" style={{ background: palette.border }} />
+              <span className="cc-legend-label" style={{ color: palette.accent }}>
+                {palette.label}
+              </span>
+            </div>
+          ))}
+          <div className="cc-legend-title" style={{ marginTop: '8px' }}>Risk Level</div>
+          {[
+            { key: 'critical', label: 'Critical', color: SECURITY_RISK_COLORS['critical'] },
+            { key: 'high',     label: 'High',     color: SECURITY_RISK_COLORS['high']     },
+            { key: 'medium',   label: 'Medium',   color: SECURITY_RISK_COLORS['medium']   },
+            { key: 'none',     label: 'Clean',    color: SECURITY_RISK_COLORS['none']     },
+          ].map(({ key, label, color }) => (
+            <div key={key} className="cc-legend-row">
+              <span className="cc-legend-swatch" style={{ background: color }} />
+              <span className="cc-legend-label" style={{ color }}>{label}</span>
             </div>
           ))}
         </div>

@@ -208,6 +208,7 @@ export default function App() {
   const [scanning, setScanning] = useState(false)
   const [complexityOverlay, setComplexityOverlay] = useState(false)
   const [complexityFilter, setComplexityFilter] = useState<'all' | 'complex' | 'critical'>('all')
+  const [securityOverlay, setSecurityOverlay] = useState(false)
   const [compact, setCompact] = useState(false)
 
   const handleScan = async () => {
@@ -296,6 +297,8 @@ export default function App() {
         graphRef={graphRef}
         complexityOverlay={complexityOverlay}
         onToggleComplexityOverlay={() => setComplexityOverlay(v => !v)}
+        securityOverlay={securityOverlay}
+        onToggleSecurityOverlay={() => setSecurityOverlay(v => !v)}
         compact={compact}
         onToggleCompact={() => setCompact(v => !v)}
       />
@@ -370,6 +373,7 @@ export default function App() {
               stressTestNodeId={stressTestNodeId}
               stressRunKey={stressRunKey}
               complexityOverlay={complexityOverlay}
+              securityOverlay={securityOverlay}
               compact={compact}
             />
           )}

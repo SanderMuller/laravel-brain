@@ -97,6 +97,14 @@ class GraphBuilder
      */
     private array $seenBindingWires = [];
 
+    /**
+     * Security surface map produced by SecurityAnalyzer.
+     * routeId => ['exposure' => string, 'riskLevel' => string, 'issues' => array[]]
+     *
+     * @var array<string, array>
+     */
+    private array $securityMap = [];
+
     public function __construct()
     {
         $this->graph = new Graph;
@@ -370,6 +378,7 @@ class GraphBuilder
      * @param  CallChainEdge[]  $callChain
      * @param  array<string, ModelDefinition>  $models
      * @param  array<string, DbQuery[]>  $dbQueryMap  "FQCN::method" => queries
+     * @param  array<string, array>  $securityMap  routeId => ['exposure'=>string, 'riskLevel'=>string, 'issues'=>array[]]
      */
     public function build(
         string $projectName,
@@ -382,6 +391,7 @@ class GraphBuilder
         array $dbQueryMap = [],
         ?ContainerBindingRegistry $bindingRegistry = null,
         ?FacadeRegistry $facadeRegistry = null,
+        array $securityMap = [],
     ): Graph {
         if ($projectRoot !== '') {
             $this->psr4Map = $this->buildFullPsr4Map($projectRoot);
@@ -393,6 +403,7 @@ class GraphBuilder
         $this->bindingRegistry = $bindingRegistry;
         $this->facadeRegistry = $facadeRegistry;
         $this->dbQueryMap = $dbQueryMap;
+        $this->securityMap = $securityMap;
         $this->graph->setMeta([
             'project' => $projectName,
             'analyzedAt' => date('c'),
@@ -1461,6 +1472,16 @@ class GraphBuilder
             if ($this->hasN1InSteps($flowSteps)) {
                 $nodeData['hasN1'] = true;
             }
+        }
+
+        // Attach security surface map data when available
+        if (isset($this->securityMap[$id])) {
+            $sec = $this->securityMap[$id];
+            $nodeData['security'] = [
+                'exposure' => $sec['exposure'],
+                'riskLevel' => $sec['riskLevel'],
+                'issues' => $sec['issues'],
+            ];
         }
 
         $this->graph->addNode(new Node($id, 'route', "{$route->method} {$route->uri}", $nodeData));
