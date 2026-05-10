@@ -2,21 +2,24 @@
 
 use LaraMint\LaravelBrain\Analysis\ModelAnalyzer;
 
-$fixtureProject = __DIR__.'/../fixtures/laravel-project';
-
-it('detects dispatchesEvents on Order model', function () use ($fixtureProject) {
+it('detects dispatchesEvents on Order model', function () {
     $analyzer = new ModelAnalyzer;
-    $models = $analyzer->analyze($fixtureProject, ['App\\Models\\Order']);
+    $models = $analyzer->analyze(fixture('laravel-project'), ['App\\Models\\Order']);
 
-    expect($models)->toHaveKey('App\\Models\\Order');
-    $order = $models['App\\Models\\Order'];
-    expect($order->firedEvents)->not->toBeEmpty();
-    expect($order->firedEvents[0])->toContain('OrderPlaced');
+    expect($models)
+        ->toBeArray()
+        ->toHaveCount(1)
+        ->toHaveKey('App\\Models\\Order');
+
+    $order = array_first($models);
+
+    expect($order)
+        ->firedEvents->toBe(["App\Events\OrderPlaced"]);
 });
 
-it('detects relationships on User model', function () use ($fixtureProject) {
+it('detects relationships on User model', function () {
     $analyzer = new ModelAnalyzer;
-    $models = $analyzer->analyze($fixtureProject, ['App\\Models\\User']);
+    $models = $analyzer->analyze(fixture('laravel-project'), ['App\\Models\\User']);
 
     expect($models)->toHaveKey('App\\Models\\User');
     $user = $models['App\\Models\\User'];
@@ -25,11 +28,12 @@ it('detects relationships on User model', function () use ($fixtureProject) {
     expect($types)->toContain('hasMany');
 });
 
-it('detects belongsTo relationship on Order model', function () use ($fixtureProject) {
+it('detects belongsTo relationship on Order model', function () {
     $analyzer = new ModelAnalyzer;
-    $models = $analyzer->analyze($fixtureProject, ['App\\Models\\Order']);
+    $models = $analyzer->analyze(fixture('laravel-project'), ['App\\Models\\Order']);
 
     $order = $models['App\\Models\\Order'];
     $types = array_column($order->relationships, 'type');
-    expect($types)->toContain('belongsTo');
+
+    expect($types)->ToBeArray()->toContain('belongsTo');
 });

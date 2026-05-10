@@ -2,23 +2,23 @@
 
 use LaraMint\LaravelBrain\Analysis\ValidationRulesExtractor;
 
-$fixtureRequest = __DIR__.'/../fixtures/laravel-project/app/Http/Requests/ProfileStoreRequest.php';
-
-it('detects a concrete rules() method', function () use ($fixtureRequest) {
+it('detects a concrete rules() method', function () {
     $extractor = new ValidationRulesExtractor;
-    expect($extractor->hasNonAbstractRulesMethod($fixtureRequest))->toBeTrue();
+    expect($extractor->hasNonAbstractRulesMethod(fixture('/laravel-project/app/Http/Requests/ProfileStoreRequest.php')))->toBeTrue();
 });
 
-it('extracts validation rows from rules() return arrays', function () use ($fixtureRequest) {
+it('extracts validation rows from rules() return arrays', function () {
     $extractor = new ValidationRulesExtractor;
-    $rows = $extractor->extractFromFile($fixtureRequest);
+    $rows = $extractor->extractFromFile(fixture('/laravel-project/app/Http/Requests/ProfileStoreRequest.php'));
 
-    expect($rows)->not->toBeEmpty();
+    expect($rows)->toBeNonEmptyArray();
 
-    $fields = implode(' ', array_column($rows, 'field'));
-    expect($fields)->toContain('name');
-    expect($fields)->toContain('email');
+    $fields = array_column($rows, 'field');
+    expect($fields)->toBe(["'name'", "'email'"]);
 
-    $rulesText = implode(' ', array_column($rows, 'rules'));
-    expect($rulesText)->toContain('required');
+    $rulesText = array_column($rows, 'rules');
+    expect($rulesText)->toBe([
+        "'required', 'string', 'max:255'",
+        "'required|email'",
+    ]);
 });

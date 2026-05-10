@@ -33,11 +33,18 @@ it('resolves module-style namespaced views under Modules/{studly}/resources/view
     try {
         $builder = new GraphBuilder;
         $rootProp = new ReflectionProperty(GraphBuilder::class, 'projectRoot');
-        $rootProp->setAccessible(true);
+
+        if (\PHP_VERSION_ID < 80100) {
+            $rootProp->setAccessible(true);
+        }
+
         $rootProp->setValue($builder, $tmp);
 
         $method = new ReflectionMethod(GraphBuilder::class, 'resolveBladePath');
-        $method->setAccessible(true);
+
+        if (\PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
+        }
 
         expect($method->invoke($builder, 'blog::posts.index'))->toBe($expected);
     } finally {
@@ -54,11 +61,18 @@ it('resolves namespaced views under resources/views/vendor/{hint}', function () 
     try {
         $builder = new GraphBuilder;
         $rootProp = new ReflectionProperty(GraphBuilder::class, 'projectRoot');
-        $rootProp->setAccessible(true);
+
+        if (\PHP_VERSION_ID < 80100) {
+            $rootProp->setAccessible(true);
+        }
+
         $rootProp->setValue($builder, $tmp);
 
         $method = new ReflectionMethod(GraphBuilder::class, 'resolveBladePath');
-        $method->setAccessible(true);
+
+        if (\PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
+        }
 
         expect($method->invoke($builder, 'acme::widget'))->toBe($expected);
     } finally {
@@ -75,11 +89,17 @@ it('falls back to scanning Modules/*/resources/views when studly folder name dif
     try {
         $builder = new GraphBuilder;
         $rootProp = new ReflectionProperty(GraphBuilder::class, 'projectRoot');
-        $rootProp->setAccessible(true);
+
+        if (\PHP_VERSION_ID < 80100) {
+            $rootProp->setAccessible(true);
+        }
+
         $rootProp->setValue($builder, $tmp);
 
         $method = new ReflectionMethod(GraphBuilder::class, 'resolveBladePath');
-        $method->setAccessible(true);
+        if (\PHP_VERSION_ID < 80100) {
+            $method->setAccessible(true);
+        }
 
         expect($method->invoke($builder, 'blog::home'))->toBe($expected);
     } finally {
