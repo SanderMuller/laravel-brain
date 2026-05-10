@@ -28,13 +28,13 @@
     },
     "scripts": {
         "lint": [
-            "pint --parallel"
+            "./vendor/bin/pint --parallel"
         ],
         "test:lint": [
-            "pint --parallel --test"
+            "./vendor/bin/pint --parallel --test"
         ],
-        "test:unit": "pest --order-by=random",
-        "test:types": "phpstan",
+        "test:unit": "./vendor/bin/pest --order-by=random",
+        "test:types": "./vendor/bin/phpstan analyse --memory-limit 512M",
         "test": [
             "@test:lint",
             "@test:unit",
