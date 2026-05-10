@@ -26,6 +26,21 @@
             "LaraMint\\LaravelBrain\\Tests\\": "tests/"
         }
     },
+    "scripts": {
+        "lint": [
+            "pint --parallel"
+        ],
+        "test:lint": [
+            "pint --parallel --test"
+        ],
+        "test:unit": "pest --order-by=random",
+        "test:types": "phpstan",
+        "test": [
+            "@test:lint",
+            "@test:unit",
+            "@test:types"
+        ]
+    },
     "extra": {
         "laravel": {
             "providers": [
