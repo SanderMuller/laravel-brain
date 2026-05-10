@@ -27,8 +27,16 @@ pest()->extend(TestCase::class)->in('Unit');
 |
 */
 
-expect()->extend('toBeOne', function () {
-    return $this->toBe(1);
+expect()->extend('toBeNonEmptyArray', function () {
+    return $this->toBeArray()->not->toBeEmpty();
+});
+
+expect()->extend('andArrayFirstElement', function () {
+    expect($this->value)->toBeNonEmptyArray();
+
+    $this->value = array_first($this->value);
+
+    return $this;
 });
 
 /*
@@ -42,7 +50,20 @@ expect()->extend('toBeOne', function () {
 |
 */
 
-function something()
-{
-    // ..
+if (! function_exists('fixture')) {
+    /**
+     * Returns fixture file or directory path
+     *
+     * @throws RuntimeException if the file or directory does not exist.
+     */
+    function fixture(string $fixture): string
+    {
+        $path = __DIR__.str_replace('/', DIRECTORY_SEPARATOR, '//fixtures/'.$fixture);
+
+        if (! file_exists($path)) {
+            throw new RuntimeException("Directory or file missing {$path}]");
+        }
+
+        return $path;
+    }
 }
