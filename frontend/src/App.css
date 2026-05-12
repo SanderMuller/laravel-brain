@@ -973,6 +973,36 @@ body::before {
 }
 .left-nav-search-clear:hover { color: var(--text); }
 
+/* ── HTTP Method Filter Badges ── */
+.left-nav-method-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.left-nav-method-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--method-color);
+  color: var(--method-color);
+  background: transparent;
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.15s, background 0.15s;
+  font-family: inherit;
+}
+.left-nav-method-badge--off {
+  opacity: 0.3;
+}
+.left-nav-method-badge:hover {
+  background: color-mix(in srgb, var(--method-color) 15%, transparent);
+  opacity: 1;
+}
+
 /* ── Left Nav (routes in sidebar top pane) ── */
 .left-nav {
   padding: 8px 0;
