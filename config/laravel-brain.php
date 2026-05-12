@@ -5,6 +5,27 @@ declare(strict_types=1);
 return [
 
     // -------------------------------------------------------------------------
+    // Auto-Discover Routes
+    // -------------------------------------------------------------------------
+    // When true, RouteAnalyzer skips AST parsing of route_paths and instead
+    // pulls every registered route from the running app via Route::getRoutes().
+    // This captures routes registered by packages/providers (Filament, Sanctum,
+    // Livewire, Telescope, ...) that AST scanning cannot see.
+    //
+    // Trade-off: file/line for each route are not populated in this mode,
+    // so the sidebar will not group routes by their declaring file. See the
+    // README's "Auto-Discover Routes" section for details.
+    //
+    'auto_discover_routes' => false,
+
+    // When auto_discover_routes is on, skip any route whose handler (controller
+    // class or closure) lives under the project's vendor/ directory. This hides
+    // package-internal routes such as Telescope, Horizon, Ignition, Sanctum's
+    // csrf-cookie, etc. Set to false to include them.
+    //
+    'auto_discover_exclude_vendor' => true,
+
+    // -------------------------------------------------------------------------
     // Route File Paths
     // -------------------------------------------------------------------------
     // Glob patterns (relative to project root) used to discover route files.

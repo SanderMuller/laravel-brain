@@ -1,7 +1,15 @@
 <?php
 
+use Acme\Pkg\AcmeVendorStub;
+use App\Http\Controllers\DashController;
+use App\Http\Controllers\MultiController;
+use App\Http\Controllers\UserController;
+use Illuminate\Container\Container;
+use Illuminate\Events\Dispatcher;
+use Illuminate\Routing\Router;
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
+use LaraMint\LaravelBrain\Http\Controllers\BrainController;
 
 it('extracts basic routes from api.php', function () {
     $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
@@ -126,7 +134,135 @@ PHP
     }
 });
 
+it('auto-discover mode pulls routes from the live router', function () {
+    $router = makeAutoDiscoverRouter();
+
+    $router->get('/users/{id}', [UserController::class, 'show']);
+    $router->post('/login', AutoDiscoverInvokableStub::class); // invokable
+    $router->get('/ping', function () {
+        return 'pong';
+    });
+    $router->middleware(['auth:sanctum'])->group(function ($router) {
+        $router->get('/dashboard', [DashController::class, 'index'])->name('dashboard');
+    });
+    $router->match(['GET', 'POST', 'HEAD'], '/multi', [MultiController::class, 'handle']);
+
+    $routes = (new RouteAnalyzer([], autoDiscover: true))->analyze('/unused');
+
+    expect($routes)->toBeArray()->each->toBeInstanceOf(RouteDefinition::class);
+
+    $show = findRoute($routes, fn ($r) => $r->uri === '/users/{id}' && $r->method === 'GET');
+    expect($show->controller)->toBe('App\Http\Controllers\UserController')
+        ->and($show->action)->toBe('show')
+        ->and($show->tabGroup)->toBe('GET /users/{id}');
+
+    // Each route lands in its own tab subgraph (matches AST-mode behaviour)
+    $tabGroups = array_map(fn ($r) => $r->tabGroup, $routes);
+    expect(count($tabGroups))->toBe(count(array_unique($tabGroups)));
+
+    $login = findRoute($routes, fn ($r) => $r->uri === '/login' && $r->method === 'POST');
+    expect($login->controller)->toBe(AutoDiscoverInvokableStub::class)
+        ->and($login->action)->toBe('__invoke');
+
+    $closure = findRoute($routes, fn ($r) => $r->uri === '/ping');
+    expect($closure->controller)->toBe('')
+        ->and($closure->action)->toBe('closure')
+        ->and($closure->closureNode)->not->toBeNull()
+        ->and($closure->closureUseMap)->toBeArray();
+
+    $dash = findRoute($routes, fn ($r) => $r->uri === '/dashboard');
+    expect($dash->middlewares)->toContain('auth:sanctum')
+        ->and($dash->name)->toBe('dashboard');
+
+    // HEAD is filtered; GET+POST remain (one RouteDefinition per non-HEAD verb)
+    $multi = array_values(array_filter($routes, fn ($r) => $r->uri === '/multi'));
+    $methods = array_map(fn ($r) => $r->method, $multi);
+    sort($methods);
+    expect($methods)->toBe(['GET', 'POST']);
+
+    Container::setInstance(null);
+});
+
+it('auto-discover mode excludes routes whose controller lives under vendor/', function () {
+    $router = makeAutoDiscoverRouter();
+
+    // App controller (this test file is NOT under vendor/)
+    $router->get('/app-route', [UserController::class, 'show']);
+
+    // Fake "vendor" controller: a stub class whose ReflectionClass file lives
+    // inside a vendor/-shaped temp directory we put on the autoloader manually.
+    $tmpVendor = sys_get_temp_dir().'/lb-vendor-'.uniqid('', true);
+    mkdir($tmpVendor.'/vendor/acme/pkg/src', 0777, true);
+    $stubFile = $tmpVendor.'/vendor/acme/pkg/src/AcmeVendorStub.php';
+    file_put_contents($stubFile, <<<'PHP'
+<?php
+namespace Acme\Pkg;
+class AcmeVendorStub
+{
+    public function __invoke() {}
+}
+PHP);
+    require $stubFile;
+
+    $router->get('/vendor-route', AcmeVendorStub::class);
+
+    try {
+        $routes = (new RouteAnalyzer([], autoDiscover: true, excludeVendor: true))
+            ->analyze($tmpVendor);
+
+        $uris = array_map(fn ($r) => $r->uri, $routes);
+        expect($uris)->toContain('/app-route')
+            ->and($uris)->not->toContain('/vendor-route');
+
+        // Disabling the filter brings the vendor route back.
+        $all = (new RouteAnalyzer([], autoDiscover: true, excludeVendor: false))
+            ->analyze($tmpVendor);
+        expect(array_map(fn ($r) => $r->uri, $all))->toContain('/vendor-route');
+    } finally {
+        routeAnalyzerTestDeleteTree($tmpVendor);
+        Container::setInstance(null);
+    }
+});
+
+it('auto-discover mode always drops the package\'s own _laravel-brain routes', function () {
+    $router = makeAutoDiscoverRouter();
+
+    $router->get('/app-route', [UserController::class, 'show']);
+    $router->get('/_laravel-brain/api/source', [BrainController::class, 'source']);
+
+    try {
+        // Even with excludeVendor disabled, brain's own routes must be skipped.
+        $routes = (new RouteAnalyzer([], autoDiscover: true, excludeVendor: false))
+            ->analyze('/unused');
+
+        $uris = array_map(fn ($r) => $r->uri, $routes);
+        expect($uris)->toContain('/app-route')
+            ->and($uris)->not->toContain('/_laravel-brain/api/source');
+    } finally {
+        Container::setInstance(null);
+    }
+});
+
 // Helper Functions
+
+class AutoDiscoverInvokableStub
+{
+    public function __invoke() {}
+}
+
+function makeAutoDiscoverRouter(): Router
+{
+    $container = new Container;
+    Container::setInstance($container);
+
+    $events = new Dispatcher($container);
+    $router = new Router($events, $container);
+
+    $container->instance('router', $router);
+    $container->instance(Router::class, $router);
+
+    return $router;
+}
 
 function findRoute(array $routes, callable $predicate): mixed
 {

@@ -36,14 +36,27 @@ class RouteAnalyzer
     /** @var string[] */
     private array $routePaths;
 
+    private bool $autoDiscover;
+
+    private bool $excludeVendor;
+
     /**
      * @param  string[]  $routePaths  Glob patterns relative to the project root.
      *                                Defaults to ['routes/*\/*.php'].
+     * @param  bool  $autoDiscover  When true, skip AST parsing and pull routes
+     *                              from the running app's Route::getRoutes().
+     * @param  bool  $excludeVendor  When auto-discover is on, drop any route
+     *                               whose handler file lives under vendor/.
      */
-    public function __construct(array $routePaths = ['routes/*/*.php'])
-    {
+    public function __construct(
+        array $routePaths = ['routes/*/*.php'],
+        bool $autoDiscover = false,
+        bool $excludeVendor = true,
+    ) {
         $this->parser = new PhpFileParser;
         $this->routePaths = $routePaths ?: ['routes/*/*.php'];
+        $this->autoDiscover = $autoDiscover;
+        $this->excludeVendor = $excludeVendor;
     }
 
     /**
@@ -51,6 +64,10 @@ class RouteAnalyzer
      */
     public function analyze(string $projectRoot): array
     {
+        if ($this->autoDiscover) {
+            return $this->discoverFromRouter($projectRoot);
+        }
+
         $routes = [];
         $routeFiles = $this->findRouteFiles($projectRoot);
 
@@ -64,6 +81,171 @@ class RouteAnalyzer
         }
 
         return $routes;
+    }
+
+    /**
+     * Build RouteDefinition[] from the running app's RouteCollection,
+     * picking up everything packages and providers register at runtime.
+     *
+     * @return RouteDefinition[]
+     */
+    private function discoverFromRouter(string $projectRoot): array
+    {
+        if (! function_exists('app')) {
+            return [];
+        }
+
+        $router = app('router');
+        $collection = $router->getRoutes();
+
+        $resolvedRoot = realpath($projectRoot);
+        $vendorPrefix = ($resolvedRoot !== false ? $resolvedRoot : rtrim($projectRoot, '/')).'/vendor/';
+
+        // Cache per-file AST so multiple closure routes in the same file parse it once.
+        $fileCache = [];
+
+        $routes = [];
+        foreach ($collection->getRoutes() as $route) {
+            $actionName = $route->getActionName();
+            $uses = $route->getAction('uses');
+
+            $closureNode = null;
+            $closureUseMap = null;
+
+            if ($actionName === 'Closure') {
+                $controller = '';
+                $actionMethod = 'closure';
+
+                if ($uses instanceof \Closure) {
+                    [$closureNode, $closureUseMap] = $this->locateClosureNode($uses, $fileCache);
+                }
+            } elseif (str_contains($actionName, '@')) {
+                [$controller, $actionMethod] = explode('@', $actionName, 2);
+            } else {
+                $controller = $actionName;
+                $actionMethod = '__invoke';
+            }
+
+            // Always drop this package's own UI/API routes (e.g. /_laravel-brain/*).
+            if ($controller !== '' && str_starts_with($controller, 'LaraMint\\LaravelBrain\\')) {
+                continue;
+            }
+
+            if ($this->excludeVendor && $this->isVendorRoute($controller, $uses, $vendorPrefix)) {
+                continue;
+            }
+
+            $uri = '/'.ltrim($route->uri(), '/');
+            $name = $route->getName() ?? '';
+            $middlewares = array_values(array_unique($route->gatherMiddleware()));
+
+            foreach ($route->methods() as $method) {
+                if (strtoupper($method) === 'HEAD') {
+                    continue;
+                }
+
+                $upperMethod = strtoupper($method);
+                $routes[] = new RouteDefinition(
+                    method: $upperMethod,
+                    uri: $uri,
+                    controller: $controller,
+                    action: $actionMethod,
+                    middlewares: $middlewares,
+                    name: $name,
+                    file: '',
+                    line: 0,
+                    tabGroup: $upperMethod.' '.$uri,
+                    closureNode: $closureNode,
+                    closureUseMap: $closureUseMap,
+                );
+            }
+        }
+
+        return $routes;
+    }
+
+    /**
+     * Decide if a route's handler lives under the project's vendor/ directory.
+     * Controller routes reflect the class file; closure routes reflect the closure.
+     * Routes we can't resolve (missing class, dynamic handlers) are kept.
+     */
+    private function isVendorRoute(string $controller, mixed $uses, string $vendorPrefix): bool
+    {
+        try {
+            if ($controller !== '' && class_exists($controller)) {
+                $file = (new \ReflectionClass($controller))->getFileName();
+
+                return is_string($file) && str_starts_with($file, $vendorPrefix);
+            }
+
+            if ($uses instanceof \Closure) {
+                $file = (new \ReflectionFunction($uses))->getFileName();
+
+                return is_string($file) && str_starts_with($file, $vendorPrefix);
+            }
+        } catch (\ReflectionException) {
+            // fall through
+        }
+
+        return false;
+    }
+
+    /**
+     * Reflect a route closure, parse the file it lives in once, and locate the
+     * matching Closure/ArrowFunction AST node so the lifecycle tracer can walk
+     * inside the closure body (same shape as AST-mode closure routes).
+     *
+     * @param  array<string, array{ast: Node\Stmt[]|null, useMap: array<string,string>}>  $fileCache
+     * @return array{0: Node\Expr\Closure|Node\Expr\ArrowFunction|null, 1: array<string,string>|null}
+     */
+    private function locateClosureNode(\Closure $closure, array &$fileCache): array
+    {
+        try {
+            $ref = new \ReflectionFunction($closure);
+        } catch (\ReflectionException) {
+            return [null, null];
+        }
+
+        $file = $ref->getFileName();
+        $startLine = $ref->getStartLine();
+        if (! is_string($file) || $file === '' || ! is_int($startLine)) {
+            return [null, null];
+        }
+
+        if (! isset($fileCache[$file])) {
+            $fileCache[$file] = $this->parser->parse($file);
+        }
+        $parsed = $fileCache[$file];
+        if ($parsed['ast'] === null) {
+            return [null, null];
+        }
+
+        $finder = new class($startLine) extends NodeVisitorAbstract
+        {
+            public Node\Expr\Closure|Node\Expr\ArrowFunction|null $match = null;
+
+            public function __construct(private int $targetLine) {}
+
+            public function enterNode(Node $node): ?int
+            {
+                if (($node instanceof Node\Expr\Closure || $node instanceof Node\Expr\ArrowFunction)
+                    && $node->getStartLine() === $this->targetLine) {
+                    $this->match = $node;
+                }
+
+                return null;
+            }
+        };
+
+        $traverser = new NodeTraverser;
+        $traverser->addVisitor($finder);
+        $traverser->traverse($parsed['ast']);
+
+        if ($finder->match === null) {
+            return [null, null];
+        }
+
+        return [$finder->match, $parsed['useMap']];
     }
 
     private function findRouteFiles(string $projectRoot): array

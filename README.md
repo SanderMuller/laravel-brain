@@ -218,6 +218,14 @@ GET /_laravel-brain
 
 LaravelBrain recursively scans your entire `routes/` directory — not just `web.php` and `api.php`. Any PHP file under `routes/**` is analyzed, including versioned files like `routes/v1/users.php` or module-specific files like `routes/modules/admin.php`.
 
+#### Auto-discover mode
+
+Set `'auto_discover_routes' => true` in `config/laravel-brain.php` to skip AST parsing and pull routes from the live Laravel router (`Route::getRoutes()`) instead. This captures routes registered programmatically by service providers and packages (Filament, Sanctum, Livewire, Telescope, etc.) that the AST scanner can't see.
+
+By default, routes whose handler (controller class or closure) lives under your project's `vendor/` directory are excluded — so package-internal routes such as Telescope, Horizon, or Ignition stay out of the graph. Flip `'auto_discover_exclude_vendor' => false` if you want them included.
+
+> **Heads up:** in auto-discover mode the source file and line number of each route are not available, so the sidebar will not group routes by their declaring file (everything falls under a single group). Use the default AST mode if file/line grouping matters to you.
+
 ### Call chain tracing
 
 From each controller action (and Filament page method), the tracer follows:

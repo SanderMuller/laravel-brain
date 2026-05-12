@@ -57,7 +57,9 @@ class ProjectAnalyzer
     public function __construct()
     {
         $routePaths = config('laravel-brain.route_paths', ['routes/*/*.php']);
-        $this->routeAnalyzer = new RouteAnalyzer($routePaths);
+        $autoDiscover = (bool) config('laravel-brain.auto_discover_routes', false);
+        $excludeVendor = (bool) config('laravel-brain.auto_discover_exclude_vendor', true);
+        $this->routeAnalyzer = new RouteAnalyzer($routePaths, $autoDiscover, $excludeVendor);
 
         $channelPaths = config('laravel-brain.channel_paths', ['routes/*/*.php']);
         $this->channelAnalyzer = new ChannelAnalyzer($channelPaths);
