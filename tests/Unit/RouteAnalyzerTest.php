@@ -1,83 +1,65 @@
 <?php
 
+use Acme\Pkg\AcmeVendorStub;
+use App\Http\Controllers\DashController;
+use App\Http\Controllers\MultiController;
+use App\Http\Controllers\UserController;
+use Illuminate\Container\Container;
+use Illuminate\Events\Dispatcher;
+use Illuminate\Routing\Router;
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
+use LaraMint\LaravelBrain\Analysis\RouteDefinition;
+use LaraMint\LaravelBrain\Http\Controllers\BrainController;
 
-$fixtureProject = __DIR__.'/../fixtures/laravel-project';
+it('extracts basic routes from api.php', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
 
-function findRoute(array $routes, callable $predicate): mixed
-{
-    foreach ($routes as $r) {
-        if ($predicate($r)) {
-            return $r;
-        }
-    }
-
-    return null;
-}
-
-function routeAnalyzerTestDeleteTree(string $dir): void
-{
-    if (! is_dir($dir)) {
-        return;
-    }
-    $it = new RecursiveIteratorIterator(
-        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
-        RecursiveIteratorIterator::CHILD_FIRST
-    );
-    foreach ($it as $fileinfo) {
-        $path = $fileinfo->getPathname();
-        if ($fileinfo->isDir()) {
-            @rmdir($path);
-        } else {
-            @unlink($path);
-        }
-    }
-    @rmdir($dir);
-}
-
-it('extracts basic routes from api.php', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    expect($routes)->not->toBeEmpty();
+    expect($routes)
+        ->toBeArray()
+        ->each->toBeInstanceOf(RouteDefinition::class);
 });
 
-it('finds the POST /login route', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('finds the POST /login route', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $login = findRoute($routes, fn ($r) => str_contains($r->uri, 'login'));
 
-    expect($login)->not->toBeNull();
-    expect($login->method)->toBe('POST');
-    expect($login->controller)->toContain('AuthController');
-    expect($login->action)->toBe('login');
+    expect($login)->toBeInstanceOf(RouteDefinition::class)
+        ->method->toBe('POST')
+        ->controller->toBe('App\Http\Controllers\AuthController')
+        ->action->toBe('login');
 });
 
-it('extracts middleware from groups', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('extracts middleware from groups', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $ordersRoute = findRoute($routes, fn ($r) => $r->uri === '/orders' && $r->method === 'GET');
 
-    expect($ordersRoute)->not->toBeNull();
-    expect($ordersRoute->middlewares)->toContain('auth:sanctum');
+    expect($ordersRoute)->toBeInstanceOf(RouteDefinition::class)
+        ->middlewares->toBeArray()->toContain('auth:sanctum');
 });
 
-it('applies prefix from nested group', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('applies prefix from nested group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $adminRoute = findRoute($routes, fn ($r) => str_contains($r->uri, 'admin'));
 
-    expect($adminRoute)->not->toBeNull();
-    expect($adminRoute->uri)->toContain('/admin/');
-    expect($adminRoute->middlewares)->toContain('role:admin');
+    expect($adminRoute)->toBeInstanceOf(RouteDefinition::class)
+        ->uri->toBe('/admin/orders/{id}')
+        ->middlewares->toBeArray()->toContain('role:admin');
 });
 
-it('finds 13 routes total', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    expect(count($routes))->toBe(13);
+it('finds 13 routes total', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+
+    expect($routes)
+        ->toBeArray()
+        ->toHaveCount(13);
 });
 
-it('captures middleware chained after the HTTP method call', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('captures middleware chained after the HTTP method call', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $brandsRoute = findRoute($routes, fn ($r) => $r->uri === '/brands' && $r->method === 'GET');
 
-    expect($brandsRoute)->not->toBeNull();
-    expect($brandsRoute->middlewares)->toContain('ability:view-maintenance-requests,monitor-maintenance,create-transfer');
+    expect($brandsRoute)->toBeInstanceOf(RouteDefinition::class)
+        ->middlewares->toBeArray()->toContain('ability:view-maintenance-requests,monitor-maintenance,create-transfer');
 });
 
 it('expands Route::resource with distinct URIs and tab groups per action', function () {
@@ -132,6 +114,7 @@ it('expands Route::apiResource without create or edit routes', function () {
 <?php
 
 use Illuminate\Support\Facades\Route;
+use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 
 Route::apiResource('posts', \App\Http\Controllers\PostController::class);
 
@@ -151,38 +134,163 @@ PHP
     }
 });
 
-it('parses Route::livewire() as a GET route with component as controller', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/web', 0777, true);
-    file_put_contents(
-        $tmp.'/routes/web/livewire.php',
-        <<<'PHP'
+it('auto-discover mode pulls routes from the live router', function () {
+    $router = makeAutoDiscoverRouter();
+
+    $router->get('/users/{id}', [UserController::class, 'show']);
+    $router->post('/login', AutoDiscoverInvokableStub::class); // invokable
+    $router->get('/ping', function () {
+        return 'pong';
+    });
+    $router->middleware(['auth:sanctum'])->group(function ($router) {
+        $router->get('/dashboard', [DashController::class, 'index'])->name('dashboard');
+    });
+    $router->match(['GET', 'POST', 'HEAD'], '/multi', [MultiController::class, 'handle']);
+
+    $routes = (new RouteAnalyzer([], autoDiscover: true))->analyze('/unused');
+
+    expect($routes)->toBeArray()->each->toBeInstanceOf(RouteDefinition::class);
+
+    $show = findRoute($routes, fn ($r) => $r->uri === '/users/{id}' && $r->method === 'GET');
+    expect($show->controller)->toBe('App\Http\Controllers\UserController')
+        ->and($show->action)->toBe('show')
+        ->and($show->tabGroup)->toBe('GET /users/{id}');
+
+    // Each route lands in its own tab subgraph (matches AST-mode behaviour)
+    $tabGroups = array_map(fn ($r) => $r->tabGroup, $routes);
+    expect(count($tabGroups))->toBe(count(array_unique($tabGroups)));
+
+    $login = findRoute($routes, fn ($r) => $r->uri === '/login' && $r->method === 'POST');
+    expect($login->controller)->toBe(AutoDiscoverInvokableStub::class)
+        ->and($login->action)->toBe('__invoke');
+
+    $closure = findRoute($routes, fn ($r) => $r->uri === '/ping');
+    expect($closure->controller)->toBe('')
+        ->and($closure->action)->toBe('closure')
+        ->and($closure->closureNode)->not->toBeNull()
+        ->and($closure->closureUseMap)->toBeArray();
+
+    $dash = findRoute($routes, fn ($r) => $r->uri === '/dashboard');
+    expect($dash->middlewares)->toContain('auth:sanctum')
+        ->and($dash->name)->toBe('dashboard');
+
+    // HEAD is filtered; GET+POST remain (one RouteDefinition per non-HEAD verb)
+    $multi = array_values(array_filter($routes, fn ($r) => $r->uri === '/multi'));
+    $methods = array_map(fn ($r) => $r->method, $multi);
+    sort($methods);
+    expect($methods)->toBe(['GET', 'POST']);
+
+    Container::setInstance(null);
+});
+
+it('auto-discover mode excludes routes whose controller lives under vendor/', function () {
+    $router = makeAutoDiscoverRouter();
+
+    // App controller (this test file is NOT under vendor/)
+    $router->get('/app-route', [UserController::class, 'show']);
+
+    // Fake "vendor" controller: a stub class whose ReflectionClass file lives
+    // inside a vendor/-shaped temp directory we put on the autoloader manually.
+    $tmpVendor = sys_get_temp_dir().'/lb-vendor-'.uniqid('', true);
+    mkdir($tmpVendor.'/vendor/acme/pkg/src', 0777, true);
+    $stubFile = $tmpVendor.'/vendor/acme/pkg/src/AcmeVendorStub.php';
+    file_put_contents($stubFile, <<<'PHP'
 <?php
+namespace Acme\Pkg;
+class AcmeVendorStub
+{
+    public function __invoke() {}
+}
+PHP);
+    require $stubFile;
 
-use Illuminate\Support\Facades\Route;
-use App\Http\Livewire\Dashboard;
-
-Route::livewire('/dashboard', Dashboard::class)->name('dashboard');
-Route::livewire('/profile', 'App\Http\Livewire\Profile');
-PHP
-    );
+    $router->get('/vendor-route', AcmeVendorStub::class);
 
     try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
+        $routes = (new RouteAnalyzer([], autoDiscover: true, excludeVendor: true))
+            ->analyze($tmpVendor);
 
-        expect($routes)->toHaveCount(2);
+        $uris = array_map(fn ($r) => $r->uri, $routes);
+        expect($uris)->toContain('/app-route')
+            ->and($uris)->not->toContain('/vendor-route');
 
-        $dashboard = findRoute($routes, fn ($r) => $r->uri === '/dashboard');
-        expect($dashboard)->not->toBeNull();
-        expect($dashboard->method)->toBe('GET');
-        expect($dashboard->controller)->toContain('Dashboard');
-        expect($dashboard->action)->toBe('render');
-
-        $profile = findRoute($routes, fn ($r) => $r->uri === '/profile');
-        expect($profile)->not->toBeNull();
-        expect($profile->method)->toBe('GET');
-        expect($profile->controller)->toBe('App\Http\Livewire\Profile');
+        // Disabling the filter brings the vendor route back.
+        $all = (new RouteAnalyzer([], autoDiscover: true, excludeVendor: false))
+            ->analyze($tmpVendor);
+        expect(array_map(fn ($r) => $r->uri, $all))->toContain('/vendor-route');
     } finally {
-        routeAnalyzerTestDeleteTree($tmp);
+        routeAnalyzerTestDeleteTree($tmpVendor);
+        Container::setInstance(null);
     }
 });
+
+it('auto-discover mode always drops the package\'s own _laravel-brain routes', function () {
+    $router = makeAutoDiscoverRouter();
+
+    $router->get('/app-route', [UserController::class, 'show']);
+    $router->get('/_laravel-brain/api/source', [BrainController::class, 'source']);
+
+    try {
+        // Even with excludeVendor disabled, brain's own routes must be skipped.
+        $routes = (new RouteAnalyzer([], autoDiscover: true, excludeVendor: false))
+            ->analyze('/unused');
+
+        $uris = array_map(fn ($r) => $r->uri, $routes);
+        expect($uris)->toContain('/app-route')
+            ->and($uris)->not->toContain('/_laravel-brain/api/source');
+    } finally {
+        Container::setInstance(null);
+    }
+});
+
+// Helper Functions
+
+class AutoDiscoverInvokableStub
+{
+    public function __invoke() {}
+}
+
+function makeAutoDiscoverRouter(): Router
+{
+    $container = new Container;
+    Container::setInstance($container);
+
+    $events = new Dispatcher($container);
+    $router = new Router($events, $container);
+
+    $container->instance('router', $router);
+    $container->instance(Router::class, $router);
+
+    return $router;
+}
+
+function findRoute(array $routes, callable $predicate): mixed
+{
+    foreach ($routes as $r) {
+        if ($predicate($r)) {
+            return $r;
+        }
+    }
+
+    return null;
+}
+
+function routeAnalyzerTestDeleteTree(string $dir): void
+{
+    if (! is_dir($dir)) {
+        return;
+    }
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($dir, FilesystemIterator::SKIP_DOTS),
+        RecursiveIteratorIterator::CHILD_FIRST
+    );
+    foreach ($it as $fileinfo) {
+        $path = $fileinfo->getPathname();
+        if ($fileinfo->isDir()) {
+            @rmdir($path);
+        } else {
+            @unlink($path);
+        }
+    }
+    @rmdir($dir);
+}

@@ -1,22 +1,42 @@
 <?php
 
+use App\Http\Controllers\V3\AbstractThingController;
+use LaraMint\LaravelBrain\Analysis\CallChainEdge;
 use LaraMint\LaravelBrain\Analysis\ControllerAnalyzer;
+use LaraMint\LaravelBrain\Analysis\ControllerDefinition;
 use LaraMint\LaravelBrain\Analysis\ControllerMiddleware;
 use LaraMint\LaravelBrain\Analysis\MethodTracer;
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
 
-$fixtureProject = __DIR__.'/../fixtures/laravel-project';
+test('HasMiddleware::appliesToAction() respects only/except parameters', function () {
 
-it('resolves controller files from routes', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+    (new RouteAnalyzer)->analyze(fixture('laravel-project'));
 
-    expect($controllers)->not->toBeEmpty();
+    expect(new ControllerMiddleware('auth'))
+        ->appliesToAction('index')->toBeTrue()
+        ->appliesToAction('destroy')->toBeTrue();
+
+    expect(new ControllerMiddleware('log', only: ['index', 'show']))
+        ->appliesToAction('index')->toBeTrue()
+        ->appliesToAction('show')->toBeTrue()
+        ->appliesToAction('store')->toBeFalse();
+
+    expect(new ControllerMiddleware('subscribed', except: ['index']))->appliesToAction('index')->toBeFalse()
+        ->appliesToAction('store')->toBeTrue();
 });
 
-it('extracts constructor dependencies', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+it('resolves controller files from routes', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
+
+    expect($controllers)
+        ->ToBeArray()
+        ->each->toBeInstanceOf(ControllerDefinition::class);
+});
+
+it('extracts constructor dependencies', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
 
     $authController = null;
     foreach ($controllers as $c) {
@@ -25,14 +45,14 @@ it('extracts constructor dependencies', function () use ($fixtureProject) {
             break;
         }
     }
-
-    expect($authController)->not->toBeNull();
-    expect($authController->constructorDeps)->toHaveKey('authService');
+    expect($authController)
+        ->toBeInstanceOf(ControllerDefinition::class)
+        ->constructorDeps->toHaveKey('authService');
 });
 
-it('extracts HasMiddleware static middleware() declarations', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+it('extracts HasMiddleware static middleware() declarations', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
 
     $userController = null;
     foreach ($controllers as $c) {
@@ -42,27 +62,36 @@ it('extracts HasMiddleware static middleware() declarations', function () use ($
         }
     }
 
-    expect($userController)->not->toBeNull();
+    expect($userController)
+        ->toBeInstanceOf(ControllerDefinition::class);
 
     $middlewareNames = array_map(fn ($m) => $m->middleware, $userController->middlewares);
-    expect($middlewareNames)->toContain('auth');
-    expect($middlewareNames)->toContain('log');
-    expect($middlewareNames)->toContain('subscribed');
+
+    expect($middlewareNames)
+        ->toBe([
+            'auth',
+            'log',
+            'subscribed',
+        ]);
 
     // 'log' applies only to index + show
     $logMw = collect($userController->middlewares)->first(fn ($m) => $m->middleware === 'log');
-    expect($logMw->only)->toBe(['index', 'show']);
-    expect($logMw->except)->toBeNull();
+
+    expect($logMw)
+        ->only->toBe(['index', 'show'])
+        ->except->toBeNull();
 
     // 'subscribed' applies to all except index
     $subscribedMw = collect($userController->middlewares)->first(fn ($m) => $m->middleware === 'subscribed');
-    expect($subscribedMw->only)->toBeNull();
-    expect($subscribedMw->except)->toBe(['index']);
+
+    expect($subscribedMw)
+        ->only->toBeNull()
+        ->except->toBe(['index']);
 });
 
-it('extracts $this->middleware() calls from constructor', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+it('extracts $this->middleware() calls from constructor', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
 
     $profileController = null;
     foreach ($controllers as $c) {
@@ -72,60 +101,55 @@ it('extracts $this->middleware() calls from constructor', function () use ($fixt
         }
     }
 
-    expect($profileController)->not->toBeNull();
+    expect($profileController)->toBeInstanceOf(ControllerDefinition::class);
 
     $middlewareNames = array_map(fn ($m) => $m->middleware, $profileController->middlewares);
-    expect($middlewareNames)->toContain('auth');
-    expect($middlewareNames)->toContain('verified');
-    expect($middlewareNames)->toContain('log');
+
+    expect($middlewareNames)->toBe(['auth', 'verified', 'log']);
 
     // 'verified' only for store
     $verifiedMw = collect($profileController->middlewares)->first(fn ($m) => $m->middleware === 'verified');
-    expect($verifiedMw->only)->toBe(['store']);
+
+    expect($verifiedMw)
+        ->toBeInstanceOf(ControllerMiddleware::class)
+        ->only->toBe(['store']);
 
     // 'log' except destroy (fluent chain)
     $logMw = collect($profileController->middlewares)->first(fn ($m) => $m->middleware === 'log');
-    expect($logMw->except)->toBe(['destroy']);
+
+    expect($logMw)
+        ->toBeInstanceOf(ControllerMiddleware::class)
+        ->except->toBe(['destroy']);
 });
 
-it('HasMiddleware::appliesToAction() respects only/except', function () {
-    $auth = new ControllerMiddleware('auth');
-    $log = new ControllerMiddleware('log', only: ['index', 'show']);
-    $sub = new ControllerMiddleware('subscribed', except: ['index']);
-
-    expect($auth->appliesToAction('index'))->toBeTrue();
-    expect($auth->appliesToAction('destroy'))->toBeTrue();
-
-    expect($log->appliesToAction('index'))->toBeTrue();
-    expect($log->appliesToAction('show'))->toBeTrue();
-    expect($log->appliesToAction('store'))->toBeFalse();
-
-    expect($sub->appliesToAction('index'))->toBeFalse();
-    expect($sub->appliesToAction('store'))->toBeTrue();
-});
-
-it('resolves same-namespace extends to FQCN and merges inherited actions', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+it('resolves same-namespace extends to FQCN and merges inherited actions', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
 
     $v3 = $controllers['App\\Http\\Controllers\\V3\\ThingV3Controller'] ?? null;
-    expect($v3)->not->toBeNull();
-    expect($v3->parent)->toBe('App\\Http\\Controllers\\V3\\AbstractThingController');
+
+    expect($v3)->toBeInstanceOf(ControllerDefinition::class)
+        ->parent->toBe(AbstractThingController::class)
+        ->ancestorFqcns->toBe(['App\\Http\\Controllers\\V3\\AbstractThingController'])
+        ->constructorDeps->toBe([
+            'fixtureHelper' => "App\Services\V3\FixtureV3Helper",
+            'things' => "App\Contracts\ThingRepositoryInterface",
+        ]);
 
     $names = array_map(fn ($m) => $m->name, $v3->methods);
-    expect($names)->toContain('index');
-    expect($names)->toContain('label');
-    expect($v3->ancestorFqcns)->toBe(['App\\Http\\Controllers\\V3\\AbstractThingController']);
 
-    expect($v3->constructorDeps)->toHaveKey('fixtureHelper')
-        ->and($v3->constructorDeps['fixtureHelper'])->toBe('App\\Services\\V3\\FixtureV3Helper');
+    expect($names)->toBe([
+        'index',
+        'warmPanelCache',
+        'label',
+    ]);
 });
 
-it('resolves $this inside inherited methods against the declaring class', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('resolves $this inside inherited methods against the declaring class', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $analyzer = new ControllerAnalyzer;
-    $controllers = $analyzer->analyze($fixtureProject, $routes);
-    $edges = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), $fixtureProject);
+    $controllers = $analyzer->analyze(fixture('laravel-project'), $routes);
+    $edges = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), fixture('laravel-project'));
 
     $ping = array_filter(
         $edges,
@@ -134,22 +158,33 @@ it('resolves $this inside inherited methods against the declaring class', functi
             && $e->calleeFqcn === 'App\\Services\\V3\\FixtureV3Helper'
             && $e->calleeMethod === 'ping'
     );
-    expect($ping)->not->toBeEmpty();
+
+    expect($ping)
+        ->toBeArray()
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(CallChainEdge::class)
+        ->calleeFqcn->toBe('App\Services\V3\FixtureV3Helper');
 
     $wrong = array_filter($edges, fn ($e) => $e->calleeMethod === 'warmPanelCache'
         && $e->calleeFqcn === 'App\\Http\\Controllers\\V3\\ThingV3Controller');
-    expect($wrong)->toBeEmpty();
+
+    expect($wrong)->toBe([]);
 
     $right = array_filter($edges, fn ($e) => $e->calleeMethod === 'warmPanelCache'
         && $e->calleeFqcn === 'App\\Http\\Controllers\\V3\\AbstractThingController');
-    expect($right)->not->toBeEmpty();
+
+    expect($right)
+        ->toBeArray()
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(CallChainEdge::class)
+        ->calleeFqcn->toBe('App\Http\Controllers\V3\AbstractThingController');
 });
 
-it('traces call chains for actions declared only on abstract parents', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('traces call chains for actions declared only on abstract parents', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $analyzer = new ControllerAnalyzer;
-    $controllers = $analyzer->analyze($fixtureProject, $routes);
-    $edges = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), $fixtureProject);
+    $controllers = $analyzer->analyze(fixture('laravel-project'), $routes);
+    $edges = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), fixture('laravel-project'));
 
     $fromInherited = array_filter(
         $edges,
@@ -158,12 +193,16 @@ it('traces call chains for actions declared only on abstract parents', function 
             && $e->type === 'view'
     );
 
-    expect($fromInherited)->not->toBeEmpty();
+    expect($fromInherited)
+        ->toBeArray()
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(CallChainEdge::class)
+        ->calleeFqcn->toBe('blade::things.v3.index');
 });
 
-it('finds methods on controllers', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+it('finds methods on controllers', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
 
     $orderController = null;
     foreach ($controllers as $c) {
@@ -172,12 +211,14 @@ it('finds methods on controllers', function () use ($fixtureProject) {
             break;
         }
     }
-
-    expect($orderController)->not->toBeNull();
+    expect($orderController)->toBeInstanceOf(ControllerDefinition::class);
 
     $methodNames = array_map(fn ($m) => $m->name, $orderController->methods);
-    expect($methodNames)->toContain('index');
-    expect($methodNames)->toContain('store');
-    expect($methodNames)->toContain('show');
-    expect($methodNames)->toContain('destroy');
+
+    expect($methodNames)->toBe([
+        'index',
+        'store',
+        'show',
+        'destroy',
+    ]);
 });

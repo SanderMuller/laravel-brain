@@ -43,6 +43,8 @@ const METHOD_COLORS: Record<string, string> = {
   DELETE: '#f87171',
 }
 
+const ALL_HTTP_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] as const
+
 function RouteItem({ tab, isActive, isLoading, onSelect }: {
   tab: TabEntry
   isActive: boolean
@@ -82,6 +84,15 @@ export function LeftSidebar({
   const [topHeight, setTopHeight] = useState(320)
   const [width, setWidth] = useState(DEFAULT_WIDTH)
   const [search, setSearch] = useState('')
+  const [visibleMethods, setVisibleMethods] = useState<Set<string>>(new Set(ALL_HTTP_METHODS))
+
+  const toggleMethod = useCallback((m: string) => {
+    setVisibleMethods(prev => {
+      const next = new Set(prev)
+      if (next.has(m)) { next.delete(m) } else { next.add(m) }
+      return next
+    })
+  }, [])
   const containerRef = useRef<HTMLDivElement>(null)
   const dragStartY = useRef(0)
   const dragStartHeight = useRef(0)
@@ -163,16 +174,26 @@ export function LeftSidebar({
 
   const filteredFileGroups = useMemo(() => {
     const q = search.trim().toLowerCase()
-    if (!q) return fileGroups
+    const allMethodsVisible = ALL_HTTP_METHODS.every(m => visibleMethods.has(m))
     return fileGroups
       .map((fg) => ({
         ...fg,
         prefixGroups: fg.prefixGroups
-          .map((pg) => ({ ...pg, tabs: pg.tabs.filter((t) => t.label.toLowerCase().includes(q)) }))
+          .map((pg) => ({
+            ...pg,
+            tabs: pg.tabs.filter((t) => {
+              if (q && !t.label.toLowerCase().includes(q)) return false
+              if (!allMethodsVisible) {
+                const firstWord = t.label.split(' ')[0]
+                if (firstWord in METHOD_COLORS && !visibleMethods.has(firstWord)) return false
+              }
+              return true
+            }),
+          }))
           .filter((pg) => pg.tabs.length > 0),
       }))
       .filter((fg) => fg.prefixGroups.length > 0)
-  }, [fileGroups, search])
+  }, [fileGroups, search, visibleMethods])
 
   return (
     <div className="left-sidebar-resizable" style={{ width }}>
@@ -227,6 +248,20 @@ export function LeftSidebar({
               </button>
             </Tooltip>
           )}
+        </div>
+        <div className="left-nav-method-filters">
+          {ALL_HTTP_METHODS.map((m) => (
+            <Tooltip key={m} content={`${visibleMethods.has(m) ? 'Hide' : 'Show'} ${m} routes`}>
+              <button
+                type="button"
+                className={`left-nav-method-badge ${!visibleMethods.has(m) ? 'left-nav-method-badge--off' : ''}`}
+                style={{ '--method-color': METHOD_COLORS[m] } as React.CSSProperties}
+                onClick={() => toggleMethod(m)}
+              >
+                {m}
+              </button>
+            </Tooltip>
+          ))}
         </div>
         <div className="left-nav">
           {filteredFileGroups.map((fg) => {

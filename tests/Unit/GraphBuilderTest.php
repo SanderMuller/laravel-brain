@@ -6,17 +6,17 @@ use LaraMint\LaravelBrain\Analysis\MethodTracer;
 use LaraMint\LaravelBrain\Analysis\MiddlewareRegistry;
 use LaraMint\LaravelBrain\Analysis\ModelAnalyzer;
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
+use LaraMint\LaravelBrain\Graph\Edge;
 use LaraMint\LaravelBrain\Graph\GraphBuilder;
+use LaraMint\LaravelBrain\Graph\Node;
 
-$fixtureProject = __DIR__.'/../fixtures/laravel-project';
-
-it('builds a graph with nodes and edges from fixture project', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('builds a graph with nodes and edges from fixture project', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $middlewareRegistry = new MiddlewareRegistry([], [], []);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
     $traces = (new MethodTracer)->trace($controllers);
     $modelFqcns = array_map(fn ($t) => $t->calleeFqcn, array_filter($traces, fn ($t) => $t->type === 'model'));
-    $models = (new ModelAnalyzer)->analyze($fixtureProject, $modelFqcns);
+    $models = (new ModelAnalyzer)->analyze(fixture('laravel-project'), $modelFqcns);
 
     $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models);
 
@@ -24,102 +24,129 @@ it('builds a graph with nodes and edges from fixture project', function () use (
     expect($graph->edgeCount())->toBeGreaterThan(0);
 });
 
-it('produces valid JSON output', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('produces valid JSON output', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $middlewareRegistry = new MiddlewareRegistry([], [], []);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
     $traces = (new MethodTracer)->trace($controllers);
 
     $modelFqcns = array_map(fn ($t) => $t->calleeFqcn, array_filter($traces, fn ($t) => $t->type === 'model'));
-    $models = (new ModelAnalyzer)->analyze($fixtureProject, $modelFqcns);
+    $models = (new ModelAnalyzer)->analyze(fixture('laravel-project'), $modelFqcns);
 
     $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models);
-    $json = $graph->toJson();
-    $decoded = json_decode($json, true);
 
-    expect($decoded)->toHaveKey('meta');
-    expect($decoded)->toHaveKey('nodes');
-    expect($decoded)->toHaveKey('edges');
-    expect($decoded['meta'])->toHaveKey('project');
-    expect($decoded['nodes'])->toBeArray();
-    expect($decoded['edges'])->toBeArray();
+    expect($graph->toJson())
+        ->json()
+        ->toHaveKeys(['meta', 'nodes', 'edges'])
+        ->meta->toBeArray()->toHaveKey('project')
+        ->nodes->toBeNonEmptyArray()
+        ->edges->toBeNonEmptyArray();
 });
 
-it('creates route nodes for each route', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('creates route nodes for each route', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $middlewareRegistry = new MiddlewareRegistry([], [], []);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
     $traces = (new MethodTracer)->trace($controllers);
     $models = [];
 
     $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models);
 
     $routeNodes = array_filter($graph->nodes(), fn ($n) => $n->type === 'route');
-    expect(count($routeNodes))->toBe(count($routes));
+
+    expect($routeNodes)->toHavecount(count($routes));
 });
 
-it('exposes parent controller nodes and extends edges for inherited actions', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('exposes parent controller nodes and extends edges for inherited actions', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $middlewareRegistry = new MiddlewareRegistry([], [], []);
-    $controllers = (new ControllerAnalyzer)->analyze($fixtureProject, $routes);
+    $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
     $traces = (new MethodTracer)->trace($controllers);
     $models = [];
 
-    $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models, $fixtureProject);
+    $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models, fixture('laravel-project'));
 
     $extends = array_values(array_filter($graph->edges(), fn ($e) => $e->type === 'controller-extends'));
-    expect($extends)->not->toBeEmpty();
+
+    expect($extends)
+        ->toBeArray()
+        ->toHaveCount(1)
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(Edge::class);
 
     $ids = array_map(fn ($n) => $n->id, $graph->nodes());
-    expect($ids)->toContain('controller::App\\Http\\Controllers\\V3\\AbstractThingController');
+
+    expect($ids)
+        ->toBeArray()
+        ->toHaveCount(52)
+        ->toContain('controller::App\\Http\\Controllers\\V3\\AbstractThingController');
 
     $handlesFromParent = array_filter(
         $graph->edges(),
         fn ($e) => $e->type === 'controller-to-action'
             && $e->source === 'controller::App\\Http\\Controllers\\V3\\AbstractThingController'
     );
-    expect($handlesFromParent)->not->toBeEmpty();
+
+    expect($handlesFromParent)
+        ->toBeArray()
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(Edge::class);
 });
 
-it('wires form request validated nodes and exposes validationRules on graph nodes', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('wires form request validated nodes and exposes validationRules on graph nodes', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $middlewareRegistry = new MiddlewareRegistry([], [], []);
     $analyzer = new ControllerAnalyzer;
-    $controllers = $analyzer->analyze($fixtureProject, $routes);
-    $traces = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), $fixtureProject);
+    $controllers = $analyzer->analyze(fixture('laravel-project'), $routes);
+    $traces = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), fixture('laravel-project'));
     $models = [];
 
-    $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models, $fixtureProject);
+    $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models, fixture('laravel-project'));
 
     $frEdges = array_values(array_filter($graph->edges(), fn ($e) => $e->type === 'action-to-form-request'));
-    expect($frEdges)->not->toBeEmpty();
+
+    expect($frEdges)
+        ->toBeArray()
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(Edge::class);
 
     $formRequestNodes = array_values(array_filter(
         $graph->nodes(),
         fn ($n) => ($n->data['fqcn'] ?? '') === 'App\\Http\\Requests\\ProfileStoreRequest'
             && ($n->data['method'] ?? '') === 'validated'
     ));
-    expect($formRequestNodes)->not->toBeEmpty();
-    expect($formRequestNodes[0]->type)->toBe('validation_request');
-    expect($formRequestNodes[0]->data['validationRules'] ?? [])->toBeArray()->not->toBeEmpty();
+
+    expect($formRequestNodes)
+        ->toBeArray()
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(Node::class)
+        ->data->validationRules->toBeNonEmptyArray()
+        ->type->toBe('validation_request');
 });
 
-it('adds IoC binding edges from service providers to interfaces and implementations', function () use ($fixtureProject) {
-    $routes = (new RouteAnalyzer)->analyze($fixtureProject);
+it('adds IoC binding edges from service providers to interfaces and implementations', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
     $middlewareRegistry = new MiddlewareRegistry([], [], []);
     $analyzer = new ControllerAnalyzer;
-    $controllers = $analyzer->analyze($fixtureProject, $routes);
-    $traces = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), $fixtureProject);
+    $controllers = $analyzer->analyze(fixture('laravel-project'), $routes);
+    $traces = (new MethodTracer)->trace($controllers, $analyzer->getPsr4Map(), fixture('laravel-project'));
     $models = [];
-    $bindings = (new ContainerBindingAnalyzer)->analyze($fixtureProject);
+    $bindings = (new ContainerBindingAnalyzer)->analyze(fixture('laravel-project'));
 
-    $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models, $fixtureProject, [], $bindings);
+    $graph = (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models, fixture('laravel-project'), [], $bindings);
 
     $types = array_map(fn ($e) => $e->type, $graph->edges());
-    expect($types)->toContain('binding-resolution');
-    expect($types)->toContain('binding-registered-in');
+
+    expect($types)
+        ->toBeArray()
+        ->toHaveCount(63)
+        ->toContain('binding-resolution', 'binding-registered-in');
 
     $resolution = array_values(array_filter($graph->edges(), fn ($e) => $e->type === 'binding-resolution'));
-    expect($resolution)->not->toBeEmpty();
-    expect($resolution[0]->label)->toContain('SqlThingRepository');
+
+    expect($resolution)
+        ->toBeArray()
+        ->andArrayFirstElement()
+        ->toBeInstanceOf(Edge::class)
+        ->label->toContain('SqlThingRepository');
 });

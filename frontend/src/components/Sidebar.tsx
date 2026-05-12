@@ -383,6 +383,7 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                 onClick={() => setActiveTab(tab.id)}
               >
                 {tab.label}
+                {tab.id === 'security' && <span className="sidebar-tab-beta">beta</span>}
                 {tab.count !== undefined && (
                   <span className="sidebar-tab-badge">{tab.count}</span>
                 )}

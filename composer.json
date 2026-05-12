@@ -26,6 +26,21 @@
             "LaraMint\\LaravelBrain\\Tests\\": "tests/"
         }
     },
+    "scripts": {
+        "lint": [
+            "./vendor/bin/pint --parallel"
+        ],
+        "test:lint": [
+            "./vendor/bin/pint --parallel --test"
+        ],
+        "test:unit": "./vendor/bin/pest --order-by=random",
+        "test:types": "./vendor/bin/phpstan analyse --memory-limit 512M",
+        "test": [
+            "@test:lint",
+            "@test:unit",
+            "@test:types"
+        ]
+    },
     "extra": {
         "laravel": {
             "providers": [

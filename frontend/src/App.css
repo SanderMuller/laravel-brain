@@ -366,6 +366,17 @@ body::before {
   box-shadow: 0 0 0 1px rgba(139,111,232,0.3), 0 0 16px rgba(139,111,232,0.2);
 }
 
+.toolbar-btn-beta {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #f59e0b;
+  opacity: 0.8;
+  vertical-align: super;
+  line-height: 1;
+}
+
 .w-full { width: 100%; }
 
 /* ── Sidebar ──────────────────────────────────── */
@@ -631,6 +642,17 @@ body::before {
   color: #a78bfa;
   border-bottom-color: #a78bfa;
   text-shadow: 0 0 10px rgba(167,139,250,0.45);
+}
+
+.sidebar-tab-beta {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #f59e0b;
+  opacity: 0.8;
+  vertical-align: super;
+  line-height: 1;
 }
 
 .sidebar-tab-badge {
@@ -972,6 +994,36 @@ body::before {
   padding: 0 2px;
 }
 .left-nav-search-clear:hover { color: var(--text); }
+
+/* ── HTTP Method Filter Badges ── */
+.left-nav-method-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 4px 8px 6px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.left-nav-method-badge {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  border: 1px solid var(--method-color);
+  color: var(--method-color);
+  background: transparent;
+  cursor: pointer;
+  opacity: 1;
+  transition: opacity 0.15s, background 0.15s;
+  font-family: inherit;
+}
+.left-nav-method-badge--off {
+  opacity: 0.3;
+}
+.left-nav-method-badge:hover {
+  background: color-mix(in srgb, var(--method-color) 15%, transparent);
+  opacity: 1;
+}
 
 /* ── Left Nav (routes in sidebar top pane) ── */
 .left-nav {

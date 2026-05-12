@@ -280,7 +280,7 @@ export function Toolbar({ layout, rankDir, onRankDirChange, nodeCount, edgeCount
                 className={`toolbar-btn ${securityOverlay ? 'toolbar-btn--active' : ''}`}
                 onClick={onToggleSecurityOverlay}
               >
-                <span>🔒</span> <span>Security</span>
+                <span>🔒</span> <span>Security</span> <span className="toolbar-btn-beta">beta</span>
               </button>
             </Tooltip>
             <Tooltip content="Compact mode: shrink graph nodes to show only the class name, reducing visual clutter on large graphs.">
