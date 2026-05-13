@@ -243,6 +243,8 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
       key !== 'members' &&
       key !== 'validationRules' &&
       key !== 'security' &&
+      key !== 'authorization' &&
+      key !== 'coverage' &&
       !(Array.isArray(val) && val.length === 0)
   )
 
@@ -460,6 +462,83 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                   ))}
                 </div>
               )}
+
+              {(() => {
+                const auth = node.data?.authorization as
+                  | { kind: string; guards: string[]; abilities: string[]; authorizes: Array<{ ability: string; model: string | null }> }
+                  | undefined
+                if (!auth || (auth.guards.length === 0 && auth.abilities.length === 0 && auth.authorizes.length === 0)) {
+                  return null
+                }
+                const kindLabel = auth.kind === 'public'
+                  ? '🌐 Public'
+                  : auth.kind === 'authenticated'
+                    ? '🔐 Authenticated'
+                    : '🛡 Policy-gated'
+                const kindColor = auth.kind === 'public'
+                  ? '#9CA3AF'
+                  : auth.kind === 'authenticated'
+                    ? '#2196F3'
+                    : '#F59E0B'
+                return (
+                  <div className="sidebar-section">
+                    <h3>Authorization</h3>
+                    <div className="prop-row">
+                      <span className="prop-key">kind</span>
+                      <span className="prop-value" style={{ color: kindColor, fontWeight: 600 }}>{kindLabel}</span>
+                    </div>
+                    {auth.guards.length > 0 && (
+                      <div className="prop-row">
+                        <span className="prop-key">guards</span>
+                        <span className="prop-value">{auth.guards.join(', ')}</span>
+                      </div>
+                    )}
+                    {auth.abilities.length > 0 && (
+                      <div className="prop-row">
+                        <span className="prop-key">abilities</span>
+                        <span className="prop-value">{auth.abilities.join(', ')}</span>
+                      </div>
+                    )}
+                    {auth.authorizes.map((a, i) => (
+                      <div key={i} className="prop-row">
+                        <span className="prop-key">authorize</span>
+                        <span className="prop-value">
+                          {a.ability}{a.model ? ` · ${a.model.split('\\').pop()}` : ''}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()}
+
+              {(() => {
+                const cov = node.data?.coverage as
+                  | { strength: 'http' | 'unit' | 'none'; covered_by: string[] }
+                  | undefined
+                if (!cov) return null
+                const palette = cov.strength === 'http'
+                  ? { color: '#10B981', label: '✓ HTTP-tested' }
+                  : cov.strength === 'unit'
+                    ? { color: '#3B82F6', label: '✓ Unit-tested' }
+                    : { color: '#EF4444', label: '✗ Untested' }
+                return (
+                  <div className="sidebar-section">
+                    <h3>Test Coverage</h3>
+                    <div className="prop-row">
+                      <span className="prop-key">strength</span>
+                      <span className="prop-value" style={{ color: palette.color, fontWeight: 600 }}>{palette.label}</span>
+                    </div>
+                    {cov.covered_by.length > 0 && (
+                      <div className="prop-row">
+                        <span className="prop-key">tests</span>
+                        <span className="prop-value" style={{ fontFamily: 'monospace', fontSize: 12 }}>
+                          {cov.covered_by.map(p => p.split('/').pop()).join(', ')}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {middlewareParams.length > 0 && (
                 <div className="sidebar-section">

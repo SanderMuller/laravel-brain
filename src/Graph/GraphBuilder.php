@@ -105,6 +105,12 @@ class GraphBuilder
      */
     private array $securityMap = [];
 
+    /** @var array<string, array<string, mixed>>  routeId => authorization data */
+    private array $authorizationMap = [];
+
+    /** @var array<string, array<string, mixed>>  routeId => coverage data */
+    private array $coverageMap = [];
+
     public function __construct()
     {
         $this->graph = new Graph;
@@ -392,6 +398,8 @@ class GraphBuilder
         ?ContainerBindingRegistry $bindingRegistry = null,
         ?FacadeRegistry $facadeRegistry = null,
         array $securityMap = [],
+        array $authorizationMap = [],
+        array $coverageMap = [],
     ): Graph {
         if ($projectRoot !== '') {
             $this->psr4Map = $this->buildFullPsr4Map($projectRoot);
@@ -404,6 +412,8 @@ class GraphBuilder
         $this->facadeRegistry = $facadeRegistry;
         $this->dbQueryMap = $dbQueryMap;
         $this->securityMap = $securityMap;
+        $this->authorizationMap = $authorizationMap;
+        $this->coverageMap = $coverageMap;
         $this->graph->setMeta([
             'project' => $projectName,
             'analyzedAt' => date('c'),
@@ -1482,6 +1492,16 @@ class GraphBuilder
                 'riskLevel' => $sec['riskLevel'],
                 'issues' => $sec['issues'],
             ];
+        }
+
+        // Attach authorization map data when available
+        if (isset($this->authorizationMap[$id])) {
+            $nodeData['authorization'] = $this->authorizationMap[$id];
+        }
+
+        // Attach test coverage data when available
+        if (isset($this->coverageMap[$id])) {
+            $nodeData['coverage'] = $this->coverageMap[$id];
         }
 
         $this->graph->addNode(new Node($id, 'route', "{$route->method} {$route->uri}", $nodeData));

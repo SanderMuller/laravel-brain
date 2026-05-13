@@ -121,6 +121,8 @@ export default function App() {
         key = 'Broadcast Channels'
       } else if (tab.category === 'Schedule') {
         key = 'Schedules'
+      } else if (tab.category === 'ERD') {
+        key = 'Data Model'
       } else if (tab.category === 'Filament') {
         // One file-group per Filament panel, named after its Panel Provider.
         // e.g. panelId="admin" → "Admin Panel", panelId="app" → "App Panel"

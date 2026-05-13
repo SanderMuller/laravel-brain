@@ -65,6 +65,16 @@ class Graph
         $this->meta = $meta;
     }
 
+    public function meta(): array
+    {
+        return $this->meta;
+    }
+
+    public function mergeMeta(array $meta): void
+    {
+        $this->meta = array_merge($this->meta, $meta);
+    }
+
     public function nodeCount(): int
     {
         return count($this->nodes);

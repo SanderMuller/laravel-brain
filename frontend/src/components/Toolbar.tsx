@@ -124,6 +124,28 @@ export function Toolbar({ layout, rankDir, onRankDirChange, nodeCount, edgeCount
     if (graphData) setShowMermaid(true)
   }
 
+  const handleExportOpenApi = async () => {
+    try {
+      const res = await fetch(import.meta.env.BASE_URL + 'api/openapi')
+      if (!res.ok) {
+        alert('OpenAPI export failed.')
+        return
+      }
+      const json = await res.text()
+      const blob = new Blob([json], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = 'openapi.json'
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    } catch {
+      alert('OpenAPI export failed.')
+    }
+  }
+
   const handleScan = async () => {
     if (!window.confirm('This will re-scan the entire project. Proceed?')) return
     setScanning(true)
@@ -335,6 +357,17 @@ export function Toolbar({ layout, rankDir, onRankDirChange, nodeCount, edgeCount
                       <span>🗺</span> <span>Copy Mermaid Code</span>
                     </button>
                   </span>
+                </Tooltip>
+              </div>
+              <div className="dropdown-item">
+                <Tooltip content="OpenAPI 3.0 spec generated from your routes (paths, FormRequest bodies, auth).">
+                  <button
+                    type="button"
+                    onClick={handleExportOpenApi}
+                    className="toolbar-btn w-full"
+                  >
+                    <span>📘</span> <span>Download OpenAPI</span>
+                  </button>
                 </Tooltip>
               </div>
               <div className="dropdown-item">

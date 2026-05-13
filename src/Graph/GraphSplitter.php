@@ -256,7 +256,49 @@ class GraphSplitter
             );
         }
 
+        // ── ERD tab: every model node + model-relationship edges ────────────────
+        $erd = $this->buildErdSubgraph($fullGraph, $projectName, $analyzedAt);
+        if ($erd->nodeCount() > 0) {
+            $erdId = 'erd';
+            $subgraphs[$erdId] = $erd;
+            $manifest[] = new TabManifestEntry(
+                id: $erdId,
+                label: 'ERD',
+                routeCount: 0,
+                nodeCount: $erd->nodeCount(),
+                edgeCount: $erd->edgeCount(),
+                file: ".graph-{$erdId}.json",
+                routeFile: '',
+                category: 'ERD',
+            );
+        }
+
         return ['subgraphs' => $subgraphs, 'manifest' => $manifest];
+    }
+
+    private function buildErdSubgraph(Graph $fullGraph, string $projectName, string $analyzedAt): Graph
+    {
+        $sub = new Graph;
+        $sub->setMeta(['project' => $projectName, 'analyzedAt' => $analyzedAt, 'view' => 'erd']);
+
+        $modelIds = [];
+        foreach ($fullGraph->nodes() as $node) {
+            if ($node->type === 'model') {
+                $sub->addNode($node);
+                $modelIds[$node->id] = true;
+            }
+        }
+
+        foreach ($fullGraph->edges() as $edge) {
+            if ($edge->type !== 'model-relationship') {
+                continue;
+            }
+            if (isset($modelIds[$edge->source]) && isset($modelIds[$edge->target])) {
+                $sub->addEdge($edge);
+            }
+        }
+
+        return $sub;
     }
 
     public function buildManifestJson(

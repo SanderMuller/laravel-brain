@@ -10,7 +10,10 @@ use Illuminate\Http\Response;
 use Illuminate\Routing\Controller;
 use LaraMint\LaravelBrain\Ai\ContextExporter;
 use LaraMint\LaravelBrain\Ai\RulesExporter;
+use LaraMint\LaravelBrain\Analysis\ControllerAnalyzer;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
+use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
+use LaraMint\LaravelBrain\OpenApi\OpenApiBuilder;
 
 class BrainController extends Controller
 {
@@ -99,6 +102,35 @@ class BrainController extends Controller
             : 'text/markdown; charset=utf-8';
 
         return response($output, 200, ['Content-Type' => $contentType]);
+    }
+
+    // ── OpenAPI export ────────────────────────────────────────────────────────
+
+    public function openapi(Request $request): Response
+    {
+        $projectPath = base_path();
+
+        $routePaths = config('laravel-brain.route_paths', ['routes/*/*.php']);
+        $autoDiscover = (bool) config('laravel-brain.auto_discover_routes', false);
+        $excludeVendor = (bool) config('laravel-brain.auto_discover_exclude_vendor', true);
+
+        $routes = (new RouteAnalyzer($routePaths, $autoDiscover, $excludeVendor))->analyze($projectPath);
+        $controllers = (new ControllerAnalyzer)->analyze($projectPath, $routes);
+
+        $title = (string) ($request->query('title') ?: (config('app.name') ?: 'Laravel API'));
+        $version = (string) ($request->query('apiVersion') ?: '1.0.0');
+
+        $spec = (new OpenApiBuilder)->build($routes, $controllers, $title, $version);
+        $json = json_encode($spec, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES);
+
+        if ($json === false) {
+            return response('Failed to encode OpenAPI spec: '.json_last_error_msg(), 500, ['Content-Type' => 'text/plain']);
+        }
+
+        return response($json, 200, [
+            'Content-Type' => 'application/json',
+            'Content-Disposition' => 'attachment; filename="openapi.json"',
+        ]);
     }
 
     // ── AI rules generation ───────────────────────────────────────────────────

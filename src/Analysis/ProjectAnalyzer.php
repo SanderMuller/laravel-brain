@@ -148,7 +148,10 @@ class ProjectAnalyzer
                 $modelFqcns[] = $edge->calleeFqcn;
             }
         }
-        $modelFqcns = array_unique($modelFqcns);
+        // Augment with project-wide model discovery so the ERD view is complete
+        // even for models that aren't reached from any controller call chain.
+        $discovered = (new EloquentModelDiscoverer)->discover($projectRoot);
+        $modelFqcns = array_values(array_unique(array_merge($modelFqcns, $discovered)));
         $models = $this->modelAnalyzer->analyze($projectRoot, $modelFqcns);
         $this->emit('step:done', ['step' => 'models', 'count' => count($models), 'unit' => 'model', 'message' => '    Found '.count($models).' model(s)']);
 
@@ -218,6 +221,18 @@ class ProjectAnalyzer
         $issueCount = array_sum(array_map(fn ($r) => count($r['issues']), $securityMap));
         $this->emit('step:done', ['step' => 'security', 'count' => $issueCount, 'unit' => 'issue', 'message' => "    Found {$issueCount} security issue(s) across ".count($securityMap).' route(s)']);
 
+        $this->emit('step:start', ['step' => 'authorization', 'label' => 'Authorization map', 'message' => '  → Building authorization map...']);
+        $authResult = (new AuthorizationAnalyzer)->analyze($routes, $controllers, $projectRoot);
+        $authorizationMap = $authResult['routes'];
+        $policyCount = count($authResult['policies']);
+        $this->emit('step:done', ['step' => 'authorization', 'count' => $policyCount, 'unit' => 'policy', 'message' => "    Found {$policyCount} policy mapping(s)"]);
+
+        $this->emit('step:start', ['step' => 'coverage', 'label' => 'Test coverage map', 'message' => '  → Building test coverage map...']);
+        $coverageResult = (new TestCoverageAnalyzer)->analyze($routes, $controllers, $projectRoot);
+        $coverageMap = $coverageResult['routes'];
+        $coveredCount = count(array_filter($coverageMap, fn ($r) => $r['strength'] !== 'none'));
+        $this->emit('step:done', ['step' => 'coverage', 'count' => $coveredCount, 'unit' => 'route', 'extra' => 'covered', 'message' => "    {$coveredCount} route(s) covered by tests"]);
+
         $this->emit('step:start', ['step' => 'container_bindings', 'label' => 'Scanning service providers', 'message' => '  → Scanning service providers (IoC bindings)...']);
         $bindingRegistry = (new ContainerBindingAnalyzer)->analyze($projectRoot);
         $bindingCount = count($bindingRegistry->all());
@@ -237,8 +252,12 @@ class ProjectAnalyzer
 
         $this->emit('step:start', ['step' => 'graph', 'label' => 'Building graph', 'message' => '  → Building graph...']);
         $fullGraph = $this->graphBuilder->build(
-            $projectName, $routes, $middlewareRegistry, $controllers, $callChain, $models, $projectRoot, $dbQueryMap, $bindingRegistry, $facadeRegistry, $securityMap,
+            $projectName, $routes, $middlewareRegistry, $controllers, $callChain, $models, $projectRoot, $dbQueryMap, $bindingRegistry, $facadeRegistry, $securityMap, $authorizationMap, $coverageMap,
         );
+        $fullGraph->mergeMeta([
+            'policies' => $authResult['policies'],
+            'coverageCloverFile' => $coverageResult['cloverFile'],
+        ]);
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);
         if ($filamentResult['detected']) {
