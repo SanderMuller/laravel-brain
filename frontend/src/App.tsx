@@ -334,16 +334,18 @@ export default function App() {
             />
           )}
         </div>
-        <Sidebar
-          selectedId={selectedId}
-          graphData={tabState.data}
-          theme={theme}
-          onClose={() => setSelectedId(null)}
-          onStressChange={(nodeId) => {
-            setStressTestNodeId(nodeId)
-            if (nodeId !== null) setStressRunKey((k) => k + 1)
-          }}
-        />
+        {selectedId && (
+          <Sidebar
+            selectedId={selectedId}
+            graphData={tabState.data}
+            theme={theme}
+            onClose={() => setSelectedId(null)}
+            onStressChange={(nodeId) => {
+              setStressTestNodeId(nodeId)
+              if (nodeId !== null) setStressRunKey((k) => k + 1)
+            }}
+          />
+        )}
       </div>
     </div>
   )
