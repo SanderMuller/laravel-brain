@@ -224,6 +224,19 @@ Set `'auto_discover_routes' => true` in `config/laravel-brain.php` to skip AST p
 
 By default, routes whose handler (controller class or closure) lives under your project's `vendor/` directory are excluded — so package-internal routes such as Telescope, Horizon, or Ignition stay out of the graph. Flip `'auto_discover_exclude_vendor' => false` if you want them included.
 
+Both settings are env-overridable, so you can toggle them per-environment without editing the published config file:
+
+```dotenv
+LARAVEL_BRAIN_AUTO_DISCOVER_ROUTES=true
+LARAVEL_BRAIN_AUTO_DISCOVER_EXCLUDE_VENDOR=false
+```
+
+To force auto-discover for a single scan without changing config, pass the flag:
+
+```bash
+php artisan brain:scan --auto-discover
+```
+
 > **Heads up:** in auto-discover mode the source file and line number of each route are not available, so the sidebar will not group routes by their declaring file (everything falls under a single group). Use the default AST mode if file/line grouping matters to you.
 
 ### Call chain tracing
@@ -306,21 +319,74 @@ Stress testing uses [`laramint/laravel-stress`](https://github.com/LaraMint/lara
 
 Single-label hostnames (Docker service names with no dots) and private IPv4 ranges are automatically allowed by the host validator, so pointing the Base URL at your internal network address will work without any extra config.
 
+## Storage Driver
+
+Scan output (the graph) can be persisted in one of two ways, selected with the
+`driver` config key (env `LARAVEL_BRAIN_DRIVER`):
+
+| Driver | Where it stores | Setup |
+| --- | --- | --- |
+| `file` (default) | `.graph-*.json` files under `storage/app/laravel-brain/` | none |
+| `database` | a database table (`laravel_brain_graphs`) | none — table auto-created on first scan |
+
+Use the `database` driver when `storage/` is not writable or not shared between
+the web and CLI processes (read-only containers, multi-node deploys):
+
+```dotenv
+LARAVEL_BRAIN_DRIVER=database
+# Optional — defaults to laravel_brain_graphs
+LARAVEL_BRAIN_DB_TABLE=laravel_brain_graphs
+```
+
+By default it uses your app's default connection. You can instead point it at a
+**dedicated database** with its own credentials — no need to edit
+`config/database.php`. Set the connection name to the bundled `laravel-brain`
+connection and fill in its credentials:
+
+```dotenv
+LARAVEL_BRAIN_DB_CONNECTION=laravel-brain
+
+LARAVEL_BRAIN_DB_DRIVER=mysql
+LARAVEL_BRAIN_DB_HOST=127.0.0.1
+LARAVEL_BRAIN_DB_PORT=3306
+LARAVEL_BRAIN_DB_DATABASE=laravel_brain
+LARAVEL_BRAIN_DB_USERNAME=brain
+LARAVEL_BRAIN_DB_PASSWORD=secret
+```
+
+Or set `LARAVEL_BRAIN_DB_CONNECTION` to the name of any existing connection
+already defined in your `config/database.php`. All reads/writes honour the
+chosen connection.
+
+The graph table is **created automatically the first time you run a scan**
+(`brain:scan` or the "Scan" button in the UI) — no `php artisan migrate` step
+is required. If the table already exists, it is left untouched.
+
+If you'd rather manage the table with your normal migrations instead, publish
+the migration and run it yourself:
+
+```bash
+php artisan vendor:publish --tag=laravel-brain-migrations
+php artisan migrate
+```
+
 ## Output Files
 
-After running `brain:scan`, the following files are written to `storage/app/laravel-brain/`:
+With the default `file` driver, `brain:scan` writes these files to
+`storage/app/laravel-brain/`:
 
 ```
 .graph-manifest.json   — Tab manifest (list of all route tabs)
-.graph-all.json        — Full combined graph (all routes)
 .graph-{tab-id}.json   — Per-route subgraph (one per route)
 ```
 
-These files are regenerated on every scan and are safe to gitignore:
+They are regenerated on every scan and are safe to gitignore:
 
 ```gitignore
 storage/app/laravel-brain/
 ```
+
+(The `database` driver stores the same payloads as rows in the configured table.)
 
 ## Security
 

@@ -6,6 +6,7 @@ namespace LaraMint\LaravelBrain\Commands;
 
 use Illuminate\Console\Command;
 use LaraMint\LaravelBrain\Ai\RulesExporter;
+use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
 class GenerateRulesCommand extends Command
 {
@@ -18,15 +19,15 @@ class GenerateRulesCommand extends Command
 
     public function handle(): int
     {
-        $storageDir = storage_path('app/laravel-brain');
+        $store = GraphStoreFactory::make();
 
-        if (! file_exists($storageDir.'/.graph-all.json')) {
+        if (! $store->hasManifest()) {
             $this->error('No scan data found — run php artisan brain:scan first');
 
             return self::FAILURE;
         }
 
-        $exporter = new RulesExporter($storageDir, base_path());
+        $exporter = new RulesExporter($store, base_path());
 
         /** @var list<string> $targets */
         $targets = (array) $this->option('target');

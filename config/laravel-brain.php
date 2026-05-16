@@ -5,6 +5,64 @@ declare(strict_types=1);
 return [
 
     // -------------------------------------------------------------------------
+    // Storage Driver
+    // -------------------------------------------------------------------------
+    // Where scan output (the graph) is persisted.
+    //
+    //   'file'      Write .graph-*.json files under storage/app/laravel-brain
+    //               (default — zero setup, requires a writable storage/ dir).
+    //   'database'  Store the graph in a database table. Run the migration
+    //               first: php artisan migrate. Useful when storage/ is not
+    //               writable or not shared between web/CLI processes.
+    //
+    // Override via the LARAVEL_BRAIN_DRIVER env variable.
+    //
+    'driver' => env('LARAVEL_BRAIN_DRIVER', 'file'),
+
+    // Settings for the 'database' driver.
+    //
+    'database' => [
+
+        // Table the graph is stored in (created by the package migration —
+        // run `php artisan migrate`, or publish it with the
+        // laravel-brain-migrations tag first).
+        //
+        'table' => env('LARAVEL_BRAIN_DB_TABLE', 'laravel_brain_graphs'),
+
+        // Which database connection to use.
+        //
+        //   null            Use the app's default connection.
+        //   '<name>'         Use an existing connection from config/database.php.
+        //   'laravel-brain'  Use the self-contained connection defined below
+        //                    (set the LARAVEL_BRAIN_DB_* env vars for it).
+        //
+        // The migration and all reads/writes honour this connection.
+        //
+        'connection' => env('LARAVEL_BRAIN_DB_CONNECTION'),
+
+        // Self-contained connection definitions. Each entry here is registered
+        // into Laravel's database.connections at boot, so you can keep the
+        // brain graph in a dedicated database with its own credentials without
+        // touching your app's config/database.php. Point 'connection' above at
+        // one of these keys to activate it.
+        //
+        'connections' => [
+            'laravel-brain' => [
+                'driver' => env('LARAVEL_BRAIN_DB_DRIVER', 'mysql'),
+                'host' => env('LARAVEL_BRAIN_DB_HOST', '127.0.0.1'),
+                'port' => env('LARAVEL_BRAIN_DB_PORT', '3306'),
+                'database' => env('LARAVEL_BRAIN_DB_DATABASE'),
+                'username' => env('LARAVEL_BRAIN_DB_USERNAME'),
+                'password' => env('LARAVEL_BRAIN_DB_PASSWORD', ''),
+                'unix_socket' => env('LARAVEL_BRAIN_DB_SOCKET', ''),
+                'charset' => env('LARAVEL_BRAIN_DB_CHARSET', 'utf8mb4'),
+                'collation' => env('LARAVEL_BRAIN_DB_COLLATION', 'utf8mb4_unicode_ci'),
+                'prefix' => '',
+            ],
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Auto-Discover Routes
     // -------------------------------------------------------------------------
     // When true, RouteAnalyzer skips AST parsing of route_paths and instead
@@ -16,14 +74,18 @@ return [
     // so the sidebar will not group routes by their declaring file. See the
     // README's "Auto-Discover Routes" section for details.
     //
-    'auto_discover_routes' => false,
+    // Override via the LARAVEL_BRAIN_AUTO_DISCOVER_ROUTES env variable.
+    //
+    'auto_discover_routes' => env('LARAVEL_BRAIN_AUTO_DISCOVER_ROUTES', false),
 
     // When auto_discover_routes is on, skip any route whose handler (controller
     // class or closure) lives under the project's vendor/ directory. This hides
     // package-internal routes such as Telescope, Horizon, Ignition, Sanctum's
     // csrf-cookie, etc. Set to false to include them.
     //
-    'auto_discover_exclude_vendor' => true,
+    // Override via the LARAVEL_BRAIN_AUTO_DISCOVER_EXCLUDE_VENDOR env variable.
+    //
+    'auto_discover_exclude_vendor' => env('LARAVEL_BRAIN_AUTO_DISCOVER_EXCLUDE_VENDOR', true),
 
     // -------------------------------------------------------------------------
     // Route File Paths

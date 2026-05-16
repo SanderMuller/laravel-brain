@@ -6,6 +6,7 @@ namespace LaraMint\LaravelBrain\Commands;
 
 use Illuminate\Console\Command;
 use LaraMint\LaravelBrain\Ai\ContextExporter;
+use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
 class ExportContextCommand extends Command
 {
@@ -21,9 +22,9 @@ class ExportContextCommand extends Command
 
     public function handle(): int
     {
-        $storageDir = storage_path('app/laravel-brain');
+        $store = GraphStoreFactory::make();
 
-        if (! file_exists($storageDir.'/.graph-all.json')) {
+        if (! $store->hasManifest()) {
             $this->error('No scan data found — run php artisan brain:scan first');
 
             return self::FAILURE;
@@ -33,7 +34,7 @@ class ExportContextCommand extends Command
             ? (string) $this->option('format')
             : 'markdown';
 
-        $exporter = new ContextExporter($storageDir, base_path());
+        $exporter = new ContextExporter($store, base_path());
 
         try {
             $output = $exporter->export(

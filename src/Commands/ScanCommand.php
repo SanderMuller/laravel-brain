@@ -6,13 +6,15 @@ namespace LaraMint\LaravelBrain\Commands;
 
 use Illuminate\Console\Command;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
+use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
 class ScanCommand extends Command
 {
     protected $signature = 'brain:scan
                             {--watch : Watch for PHP file changes and auto-rescan}
                             {--interval=3 : Poll interval in seconds (watch mode only)}
-                            {--memory-limit=1024M : Increase memory limit for scanning. Example: 1024M}';
+                            {--memory-limit=1024M : Increase memory limit for scanning. Example: 1024M}
+                            {--auto-discover : Force auto-discover routes mode for this scan (overrides config)}';
 
     protected $description = 'Analyze this Laravel project and open the interactive graph viewer';
 
@@ -181,22 +183,28 @@ class ScanCommand extends Command
             $this->newLine();
         }
 
+        if ($this->option('auto-discover')) {
+            config(['laravel-brain.auto_discover_routes' => true]);
+        }
+
         $analyzer = new ProjectAnalyzer;
 
         $result = $analyzer->analyze($projectPath, function (string $event, array $data) use ($verbose): void {
             $this->handleProgress($event, $data, $verbose);
         });
 
+        $store = GraphStoreFactory::make();
+        $store->ensureSchema();
+        $store->putManifest($result->manifestJson);
+
+        foreach ($result->subgraphs as $tabId => $subgraph) {
+            $store->putSubgraph((string) $tabId, $subgraph->toJson());
+        }
+
+        // The one-time support prompt flag lives on disk regardless of driver.
         $storageDir = storage_path('app/laravel-brain');
         if (! is_dir($storageDir)) {
             mkdir($storageDir, 0755, true);
-        }
-
-        file_put_contents($storageDir.'/.graph-manifest.json', $result->manifestJson);
-        file_put_contents($storageDir.'/.graph-all.json', $result->fullGraph->toJson());
-
-        foreach ($result->subgraphs as $tabId => $subgraph) {
-            file_put_contents($storageDir."/.graph-{$tabId}.json", $subgraph->toJson());
         }
 
         if ($verbose) {

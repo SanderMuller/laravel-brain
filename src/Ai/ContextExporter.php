@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Ai;
 
+use LaraMint\LaravelBrain\Storage\GraphStore;
+
 class ContextExporter
 {
     private const CHARS_PER_TOKEN = 4;
@@ -16,7 +18,7 @@ class ContextExporter
     ];
 
     public function __construct(
-        private readonly string $storageDir,
+        private readonly GraphStore $store,
         private readonly string $projectPath = '',
     ) {}
 
@@ -26,18 +28,8 @@ class ContextExporter
         int $budget = 6000,
         string $format = 'markdown',
     ): string {
-        $graphFile = $this->storageDir.'/.graph-all.json';
-
-        if (! file_exists($graphFile)) {
-            throw new \RuntimeException('No scan data found — run php artisan brain:scan first');
-        }
-
-        $raw = (string) file_get_contents($graphFile);
-        $graph = json_decode($raw, true);
-
-        if (! is_array($graph)) {
-            throw new \RuntimeException('Graph data is corrupt — run php artisan brain:scan again');
-        }
+        // Reconstructed from the per-tab subgraphs (no monolithic graph).
+        $graph = MergedGraph::load($this->store);
 
         /** @var array<string, array<string, mixed>> $nodeIndex */
         $nodeIndex = [];

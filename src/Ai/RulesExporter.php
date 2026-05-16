@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Ai;
 
+use LaraMint\LaravelBrain\Storage\GraphStore;
+
 class RulesExporter
 {
     /** @var array<string, array{path: string, label: string}> */
@@ -19,7 +21,7 @@ class RulesExporter
     ];
 
     public function __construct(
-        private readonly string $storageDir,
+        private readonly GraphStore $store,
         private readonly string $projectPath,
     ) {}
 
@@ -65,16 +67,11 @@ class RulesExporter
      */
     private function loadProjectData(): array
     {
-        $graphFile = $this->storageDir.'/.graph-all.json';
-        $manifestFile = $this->storageDir.'/.graph-manifest.json';
-
-        if (! file_exists($graphFile)) {
-            throw new \RuntimeException('No scan data found — run php artisan brain:scan first');
-        }
-
-        $graph = json_decode((string) file_get_contents($graphFile), true) ?? [];
-        $manifest = file_exists($manifestFile)
-            ? (json_decode((string) file_get_contents($manifestFile), true) ?? [])
+        // Reconstructed from the per-tab subgraphs (no monolithic graph).
+        $graph = MergedGraph::load($this->store);
+        $manifestJson = $this->store->getManifest();
+        $manifest = $manifestJson !== null
+            ? (json_decode($manifestJson, true) ?? [])
             : [];
 
         $nodes = (array) ($graph['nodes'] ?? []);

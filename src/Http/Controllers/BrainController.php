@@ -11,6 +11,7 @@ use Illuminate\Routing\Controller;
 use LaraMint\LaravelBrain\Ai\ContextExporter;
 use LaraMint\LaravelBrain\Ai\RulesExporter;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
+use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
 class BrainController extends Controller
 {
@@ -41,16 +42,12 @@ class BrainController extends Controller
         $result = $analyzer->analyze($projectPath);
         ob_end_clean();
 
-        $storageDir = storage_path('app/laravel-brain');
-        if (! is_dir($storageDir)) {
-            mkdir($storageDir, 0755, true);
-        }
-
-        file_put_contents($storageDir.'/.graph-manifest.json', $result->manifestJson);
-        file_put_contents($storageDir.'/.graph-all.json', $result->fullGraph->toJson());
+        $store = GraphStoreFactory::make();
+        $store->ensureSchema();
+        $store->putManifest($result->manifestJson);
 
         foreach ($result->subgraphs as $tabId => $subgraph) {
-            file_put_contents($storageDir."/.graph-{$tabId}.json", $subgraph->toJson());
+            $store->putSubgraph((string) $tabId, $subgraph->toJson());
         }
 
         return response()->json([
@@ -64,9 +61,9 @@ class BrainController extends Controller
 
     public function context(Request $request): Response
     {
-        $storageDir = storage_path('app/laravel-brain');
+        $store = GraphStoreFactory::make();
 
-        if (! file_exists($storageDir.'/.graph-all.json')) {
+        if (! $store->hasManifest()) {
             return response(
                 'No scan data found — run php artisan brain:scan first',
                 404,
@@ -81,7 +78,7 @@ class BrainController extends Controller
             ? (string) $request->query('format', 'markdown')
             : 'markdown';
 
-        $exporter = new ContextExporter($storageDir, base_path());
+        $exporter = new ContextExporter($store, base_path());
 
         try {
             $output = $exporter->export(
@@ -105,9 +102,9 @@ class BrainController extends Controller
 
     public function generateRules(Request $request): JsonResponse
     {
-        $storageDir = storage_path('app/laravel-brain');
+        $store = GraphStoreFactory::make();
 
-        if (! file_exists($storageDir.'/.graph-all.json')) {
+        if (! $store->hasManifest()) {
             return response()->json([
                 'error' => 'No scan data found — run php artisan brain:scan first',
             ], 404);
@@ -128,7 +125,7 @@ class BrainController extends Controller
         }
 
         $force = (bool) $request->input('force', false);
-        $exporter = new RulesExporter($storageDir, base_path());
+        $exporter = new RulesExporter($store, base_path());
 
         // Check for existing files before writing (unless force is set)
         if (! $force) {
@@ -292,16 +289,20 @@ class BrainController extends Controller
     {
         $any = ltrim($any, '/');
 
-        if (preg_match('/^\.graph-[a-z0-9_-]+\.json$/', $any)) {
-            $path = storage_path('app/laravel-brain/'.$any);
-            if (! file_exists($path)) {
+        if (preg_match('/^\.graph-([a-z0-9_-]+)\.json$/', $any, $m)) {
+            $store = GraphStoreFactory::make();
+            $payload = $m[1] === 'manifest'
+                ? $store->getManifest()
+                : $store->getSubgraph($m[1]);
+
+            if ($payload === null) {
                 return response()->json(
                     ['error' => 'No scan data found — run php artisan brain:scan first'],
                     404
                 );
             }
 
-            return response(file_get_contents($path), 200, ['Content-Type' => 'application/json']);
+            return response($payload, 200, ['Content-Type' => 'application/json']);
         }
 
         if ($any !== '') {
