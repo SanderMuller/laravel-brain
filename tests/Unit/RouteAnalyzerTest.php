@@ -243,6 +243,118 @@ it('auto-discover mode always drops the package\'s own _laravel-brain routes', f
     }
 });
 
+it('resolves bare action strings inside Route::controller() groups', function () {
+    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
+    mkdir($tmp.'/routes/web', 0777, true);
+    file_put_contents(
+        $tmp.'/routes/web/memes.php',
+        <<<'PHP'
+<?php
+
+use App\Http\Controllers\MemeController;
+use Illuminate\Support\Facades\Route;
+
+Route::controller(MemeController::class)->group(function () {
+    Route::get('/divorce-child-custody-memes', 'index')->name('index.memes');
+    Route::get('/divorce-child-custody-memes/{id}', 'showMemeById')->whereNumber('id')->name('show.meme-by-id');
+    Route::get('/divorce-child-custody-memes/{slug}', 'show')->where('slug', '(.*)?')->name('show.meme-by-slug');
+});
+
+Route::get('/divorce-child-custody-memes/1/', function () {
+    return redirect()->route('index.memes');
+});
+
+PHP
+    );
+
+    try {
+        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
+
+        $index = findRoute($routes, fn ($r) => $r->uri === '/divorce-child-custody-memes' && $r->method === 'GET');
+        expect($index)->toBeInstanceOf(RouteDefinition::class)
+            ->controller->toBe('App\Http\Controllers\MemeController')
+            ->action->toBe('index');
+
+        $byId = findRoute($routes, fn ($r) => $r->uri === '/divorce-child-custody-memes/{id}');
+        expect($byId)->toBeInstanceOf(RouteDefinition::class)
+            ->controller->toBe('App\Http\Controllers\MemeController')
+            ->action->toBe('showMemeById');
+
+        $bySlug = findRoute($routes, fn ($r) => $r->uri === '/divorce-child-custody-memes/{slug}');
+        expect($bySlug)->toBeInstanceOf(RouteDefinition::class)
+            ->controller->toBe('App\Http\Controllers\MemeController')
+            ->action->toBe('show');
+
+        $closure = findRoute($routes, fn ($r) => $r->uri === '/divorce-child-custody-memes/1/');
+        expect($closure)->toBeInstanceOf(RouteDefinition::class)
+            ->controller->toBe('Closure');
+    } finally {
+        routeAnalyzerTestDeleteTree($tmp);
+    }
+});
+
+it('follows require into a route file carrying parent group context, once', function () {
+    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
+    mkdir($tmp.'/routes/inc', 0777, true);
+    file_put_contents(
+        $tmp.'/routes/api.php',
+        <<<'PHP'
+<?php
+
+use App\Http\Middleware\EnsureProjectUnlocked;
+use Illuminate\Support\Facades\Route;
+
+Route::middleware(['auth:sanctum', 'throttle:api', EnsureProjectUnlocked::class])
+    ->prefix('api')
+    ->group(function () {
+        require __DIR__ . '/inc/notes.php';
+    });
+
+PHP
+    );
+    file_put_contents(
+        $tmp.'/routes/inc/notes.php',
+        <<<'PHP'
+<?php
+
+use App\Http\Controllers\ClientController;
+use App\Http\Middleware\EnforcesModelRelations;
+use Illuminate\Support\Facades\Route;
+
+Route::middleware([EnforcesModelRelations::class])->group(function () {
+    Route::get('clients/{client}/notes', [ClientController::class, 'indexNotes']);
+    Route::post('clients/{client}/notes', [ClientController::class, 'storeNote']);
+});
+
+PHP
+    );
+
+    try {
+        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
+
+        $index = findRoute($routes, fn ($r) => $r->method === 'GET' && str_contains($r->uri, 'clients'));
+        expect($index)->toBeInstanceOf(RouteDefinition::class)
+            ->uri->toBe('/api/clients/{client}/notes')
+            ->controller->toBe('App\Http\Controllers\ClientController')
+            ->action->toBe('indexNotes');
+        expect($index->middlewares)
+            ->toContain('auth:sanctum')
+            ->toContain('throttle:api')
+            ->toContain('App\Http\Middleware\EnsureProjectUnlocked')
+            ->toContain('App\Http\Middleware\EnforcesModelRelations');
+
+        // notes.php must not also be parsed standalone (which would yield a
+        // duplicate without the parent prefix/middleware).
+        $noteRoutes = array_values(array_filter($routes, fn ($r) => str_contains($r->uri, 'clients')));
+        expect($noteRoutes)->toHaveCount(2);
+        foreach ($noteRoutes as $r) {
+            expect($r->uri)->toStartWith('/api/');
+        }
+    } finally {
+        routeAnalyzerTestDeleteTree($tmp);
+    }
+});
+
 // Helper Functions
 
 class AutoDiscoverInvokableStub

@@ -71,9 +71,29 @@ class RouteAnalyzer
         $routes = [];
         $routeFiles = $this->findRouteFiles($projectRoot);
 
+        // First pass: parse every file once and collect every statically
+        // resolvable require/include target. Files pulled in via require are
+        // parsed only through the require (with the enclosing group's context),
+        // never standalone — otherwise they'd appear twice / without middleware.
+        $parsedFiles = [];
+        $includedFiles = [];
         foreach ($routeFiles as $file) {
             $parsed = $this->parser->parse($file);
             if ($parsed['ast'] === null) {
+                continue;
+            }
+            $parsedFiles[$file] = $parsed;
+            foreach ($this->collectIncludeTargets($parsed['ast'], $file) as $target) {
+                $includedFiles[$target] = true;
+            }
+        }
+
+        // Second pass: extract from files that are not pulled in elsewhere.
+        // Recursion into require'd files (RouteAnalyzer::extractIncludedFile)
+        // attaches their routes once, with the correct parent context.
+        foreach ($parsedFiles as $file => $parsed) {
+            $real = realpath($file);
+            if ($real !== false && isset($includedFiles[$real])) {
                 continue;
             }
 
@@ -81,6 +101,120 @@ class RouteAnalyzer
         }
 
         return $routes;
+    }
+
+    /**
+     * Statically resolves `__DIR__`/`__FILE__`/string-literal/concat include
+     * paths. Returns null for anything it can't resolve without executing code.
+     */
+    public function resolveIncludePath(Node $expr, string $currentFile): ?string
+    {
+        if ($expr instanceof Node\Scalar\String_) {
+            return $expr->value;
+        }
+        if ($expr instanceof Node\Scalar\MagicConst\Dir) {
+            return \dirname($currentFile);
+        }
+        if ($expr instanceof Node\Scalar\MagicConst\File) {
+            return $currentFile;
+        }
+        if ($expr instanceof Node\Expr\BinaryOp\Concat) {
+            $left = $this->resolveIncludePath($expr->left, $currentFile);
+            $right = $this->resolveIncludePath($expr->right, $currentFile);
+            if ($left === null || $right === null) {
+                return null;
+            }
+
+            return $left.$right;
+        }
+
+        return null;
+    }
+
+    /**
+     * Parse a require'd route file and extract its routes with the enclosing
+     * group's prefix/middleware/namespace/controller context applied.
+     *
+     * @param  string[]  $prefixStack
+     * @param  array<int, string[]>  $middlewareStack
+     * @param  string[]  $namespaceStack
+     * @param  string[]  $controllerStack
+     * @param  array<string, true>  $visited
+     * @return RouteDefinition[]
+     *
+     * @internal
+     */
+    public function extractIncludedFile(
+        string $absPath,
+        array $prefixStack,
+        array $middlewareStack,
+        array $namespaceStack,
+        array $controllerStack,
+        array $visited,
+    ): array {
+        $parsed = $this->parser->parse($absPath);
+        if ($parsed['ast'] === null) {
+            return [];
+        }
+
+        return $this->extractRoutes(
+            $parsed['ast'],
+            $parsed['useMap'],
+            $absPath,
+            $prefixStack,
+            $middlewareStack,
+            $namespaceStack,
+            $controllerStack,
+            $visited,
+        );
+    }
+
+    /**
+     * Collects realpaths of every statically resolvable require/include target
+     * within a parsed file.
+     *
+     * @param  Node\Stmt[]  $ast
+     * @return string[]
+     */
+    private function collectIncludeTargets(array $ast, string $file): array
+    {
+        $analyzer = $this;
+        $traverser = new NodeTraverser;
+        $visitor = new class($analyzer, $file) extends NodeVisitorAbstract
+        {
+            /** @var string[] */
+            public array $targets = [];
+
+            private RouteAnalyzer $analyzer;
+
+            private string $file;
+
+            public function __construct(RouteAnalyzer $analyzer, string $file)
+            {
+                $this->analyzer = $analyzer;
+                $this->file = $file;
+            }
+
+            public function enterNode(Node $node): ?int
+            {
+                if ($node instanceof Node\Expr\Include_) {
+                    $path = $this->analyzer->resolveIncludePath($node->expr, $this->file);
+                    if ($path !== null) {
+                        $real = realpath($path);
+                        if ($real !== false) {
+                            $this->targets[] = $real;
+                        }
+                    }
+                }
+
+                return null;
+            }
+        };
+
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+
+        return $visitor->targets;
     }
 
     /**
@@ -352,14 +486,26 @@ class RouteAnalyzer
     /**
      * @param  Node\Stmt[]  $ast
      * @param  array<string, string>  $useMap
+     * @param  string[]  $seedPrefix  Prefix stack inherited from an enclosing require
+     * @param  array<int, string[]>  $seedMiddleware  Middleware stack inherited from an enclosing require
+     * @param  string[]  $seedNamespace  Namespace stack inherited from an enclosing require
+     * @param  string[]  $seedController  Controller stack inherited from an enclosing require
+     * @param  array<string, true>  $visited  Realpaths already being parsed (include-cycle guard)
      * @return RouteDefinition[]
      */
-    private function extractRoutes(array $ast, array $useMap, string $file): array
-    {
-        $routes = [];
+    private function extractRoutes(
+        array $ast,
+        array $useMap,
+        string $file,
+        array $seedPrefix = [],
+        array $seedMiddleware = [],
+        array $seedNamespace = [],
+        array $seedController = [],
+        array $visited = [],
+    ): array {
         $traverser = new NodeTraverser;
 
-        $visitor = new class($useMap, $file, $this) extends NodeVisitorAbstract
+        $visitor = new class($useMap, $file, $this, $seedPrefix, $seedMiddleware, $seedNamespace, $seedController, $visited) extends NodeVisitorAbstract
         {
             public array $routes = [];
 
@@ -369,11 +515,16 @@ class RouteAnalyzer
 
             private array $namespaceStack = [];
 
+            private array $controllerStack = [];
+
             private array $useMap;
 
             private string $file;
 
             private RouteAnalyzer $routeAnalyzer;
+
+            /** @var array<string, true> */
+            private array $visited;
 
             private const HTTP_METHODS = ['get', 'post', 'put', 'patch', 'delete', 'options', 'any'];
 
@@ -385,15 +536,36 @@ class RouteAnalyzer
              */
             private const POST_ROUTE_CHAIN_METHODS = ['middleware', 'withoutMiddleware', 'name', 'where', 'defaults', 'scopeBindings', 'withTrashed', 'missing', 'can'];
 
-            public function __construct(array $useMap, string $file, RouteAnalyzer $routeAnalyzer)
-            {
+            public function __construct(
+                array $useMap,
+                string $file,
+                RouteAnalyzer $routeAnalyzer,
+                array $seedPrefix,
+                array $seedMiddleware,
+                array $seedNamespace,
+                array $seedController,
+                array $visited,
+            ) {
                 $this->useMap = $useMap;
                 $this->file = $file;
                 $this->routeAnalyzer = $routeAnalyzer;
+                $this->prefixStack = $seedPrefix;
+                $this->middlewareStack = $seedMiddleware;
+                $this->namespaceStack = $seedNamespace;
+                $this->controllerStack = $seedController;
+                $this->visited = $visited;
             }
 
             public function enterNode(Node $node): ?int
             {
+                // require/include of another route file (e.g. require __DIR__.'/inc/notes.php';)
+                // — recurse into it carrying the current group context (prefix/middleware/namespace/controller).
+                if ($node instanceof Node\Expr\Include_) {
+                    $this->handleInclude($node);
+
+                    return null;
+                }
+
                 // StaticCall: Route::get(), Route::group(), Route::resource()
                 if ($node instanceof Node\Expr\StaticCall) {
                     $class = $this->resolveClass($node->class);
@@ -461,6 +633,9 @@ class RouteAnalyzer
                     if (! empty($this->namespaceStack)) {
                         array_pop($this->namespaceStack);
                     }
+                    if (! empty($this->controllerStack)) {
+                        array_pop($this->controllerStack);
+                    }
                 }
 
                 return null;
@@ -477,15 +652,19 @@ class RouteAnalyzer
                     return;
                 }
 
-                [$controller, $actionMethod, $closureNode] = $this->extractAction($node->args[1] ?? null);
-
-                // If it's a MethodCall, we might have prefixes/middlewares in the chain
+                // If it's a MethodCall, we might have prefixes/middlewares/controller in the chain
                 $chainPrefix = '';
                 $chainMiddlewares = [];
                 $chainNamespace = '';
+                $chainController = '';
                 if ($node instanceof Node\Expr\MethodCall) {
-                    $this->walkChain($node->var, $chainPrefix, $chainMiddlewares, $chainNamespace);
+                    $this->walkChain($node->var, $chainPrefix, $chainMiddlewares, $chainNamespace, $chainController);
                 }
+
+                $stackController = end($this->controllerStack) ?: '';
+                $controllerContext = $chainController !== '' ? $chainController : $stackController;
+
+                [$controller, $actionMethod, $closureNode] = $this->extractAction($node->args[1] ?? null, $controllerContext);
 
                 if ($controller !== 'Closure' && $controller !== '' && ! str_starts_with($controller, '\\')) {
                     $namespace = implode('\\', array_filter($this->namespaceStack));
@@ -717,22 +896,25 @@ class RouteAnalyzer
                 $this->prefixStack[] = $prefix ? '/'.ltrim($prefix, '/') : '';
                 $this->middlewareStack[] = $middlewares;
                 $this->namespaceStack[] = $namespace;
+                $this->controllerStack[] = '';
             }
 
             private function enterGroupFromMethodChain(Node\Expr\MethodCall $node): void
             {
-                // Walk up the chain: ->group() called on ->middleware([...])->prefix(...) etc.
+                // Walk up the chain: ->group() called on ->middleware([...])->prefix(...)->controller(...) etc.
                 $prefix = '';
                 $middlewares = [];
                 $namespace = '';
-                $this->walkChain($node->var, $prefix, $middlewares, $namespace);
+                $controller = '';
+                $this->walkChain($node->var, $prefix, $middlewares, $namespace, $controller);
 
                 $this->prefixStack[] = $prefix ? '/'.ltrim($prefix, '/') : '';
                 $this->middlewareStack[] = $middlewares;
                 $this->namespaceStack[] = $namespace;
+                $this->controllerStack[] = $controller;
             }
 
-            private function walkChain(Node $node, string &$prefix, array &$middlewares, string &$namespace): void
+            private function walkChain(Node $node, string &$prefix, array &$middlewares, string &$namespace, string &$controller = ''): void
             {
                 if ($node instanceof Node\Expr\StaticCall || $node instanceof Node\Expr\MethodCall) {
                     $method = $node->name instanceof Node\Identifier ? $node->name->toString() : null;
@@ -743,18 +925,57 @@ class RouteAnalyzer
                         $prefix = $this->extractString($node->args[0]) ?? '';
                     } elseif ($method === 'namespace' && ! empty($node->args)) {
                         $namespace = $this->extractString($node->args[0]) ?? '';
+                    } elseif ($method === 'controller' && ! empty($node->args)) {
+                        $controller = $this->extractClassRef($node->args[0]->value);
                     }
 
                     // Walk the callee
                     $callee = $node instanceof Node\Expr\MethodCall ? $node->var : $node->class;
-                    $this->walkChain($callee, $prefix, $middlewares, $namespace);
+                    $this->walkChain($callee, $prefix, $middlewares, $namespace, $controller);
+                }
+            }
+
+            private function handleInclude(Node\Expr\Include_ $node): void
+            {
+                $target = $this->routeAnalyzer->resolveIncludePath($node->expr, $this->file);
+                if ($target === null) {
+                    return;
+                }
+
+                $real = realpath($target);
+                if ($real === false || ! is_file($real) || ! is_readable($real)) {
+                    return;
+                }
+
+                // Guard against include cycles.
+                if (isset($this->visited[$real])) {
+                    return;
+                }
+                $selfReal = realpath($this->file);
+                $visited = $this->visited;
+                if ($selfReal !== false) {
+                    $visited[$selfReal] = true;
+                }
+                $visited[$real] = true;
+
+                $included = $this->routeAnalyzer->extractIncludedFile(
+                    $real,
+                    $this->prefixStack,
+                    $this->middlewareStack,
+                    $this->namespaceStack,
+                    $this->controllerStack,
+                    $visited,
+                );
+
+                foreach ($included as $route) {
+                    $this->routes[] = $route;
                 }
             }
 
             /**
              * @return array{0: string, 1: string, 2: Node\Expr\Closure|Node\Expr\ArrowFunction|null}
              */
-            private function extractAction(?Node $node): array
+            private function extractAction(?Node $node, string $controllerContext = ''): array
             {
                 if ($node === null) {
                     return ['', '', null];
@@ -779,6 +1000,12 @@ class RouteAnalyzer
                         $parts = explode('@', $value->value, 2);
 
                         return [$parts[0], $parts[1], null];
+                    }
+
+                    // Inside Route::controller(X::class)->group(...) a bare string is a
+                    // method name on the group controller, not an invokable controller.
+                    if ($controllerContext !== '') {
+                        return [$controllerContext, $value->value, null];
                     }
 
                     return [$value->value, '__invoke', null];
