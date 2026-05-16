@@ -1093,8 +1093,15 @@ body::before {
 
 /* ── Prefix group ────────────────────────────────── */
 .left-nav-prefix-group {
-  margin-left: 4px;
+  margin-left: 8px;
   border-left: 1px solid var(--border);
+}
+
+.left-nav-empty {
+  padding: 10px;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-family: 'ui-monospace', 'Fira Code', monospace;
 }
 
 .left-nav-prefix-header {
@@ -1188,6 +1195,33 @@ body::before {
   padding: 1px 5px;
   font-size: 10px;
   color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.left-nav-issue-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.left-nav-issue-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: color-mix(in srgb, var(--issue-color) 18%, transparent);
+  color: var(--issue-color);
+  border: 1px solid color-mix(in srgb, var(--issue-color) 45%, transparent);
+  border-radius: 99px;
+  padding: 0 5px;
+  height: 16px;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.left-nav-issue-badge svg {
   flex-shrink: 0;
 }
 

@@ -82,6 +82,12 @@ export interface TabEntry {
   routeFile?: string
   category?: string
   panelId?: string
+  issueCount?: number
+  riskLevel?: 'none' | 'low' | 'medium' | 'high' | 'critical'
+  securityCount?: number
+  n1Count?: number
+  fatMethodCount?: number
+  fatClassCount?: number
 }
 
 export interface Manifest {

@@ -107,75 +107,7 @@ export default function App() {
     }
   }
 
-  const groupedTabs = useMemo(() => {
-    if (!manifest) return { fileGroups: [] }
-    const routeTabs = manifest.tabs;
-
-    // Group route tabs by their source route file or virtual category
-    const byFile = new Map<string, TabEntry[]>()
-    routeTabs.forEach((tab) => {
-      let key: string
-      if (tab.category === 'Command') {
-        key = 'Console Commands'
-      } else if (tab.category === 'Channel') {
-        key = 'Broadcast Channels'
-      } else if (tab.category === 'Schedule') {
-        key = 'Schedules'
-      } else if (tab.category === 'Filament') {
-        // One file-group per Filament panel, named after its Panel Provider.
-        // e.g. panelId="admin" → "Admin Panel", panelId="app" → "App Panel"
-        const panelId = tab.panelId ?? ''
-        const panelLabel = panelId
-          ? panelId.charAt(0).toUpperCase() + panelId.slice(1) + ' Panel'
-          : 'Filament'
-        key = `Filament · ${panelLabel}`
-      } else {
-        key = tab.routeFile ?? 'routes.php'
-      }
-      const list = byFile.get(key) ?? []
-      list.push(tab)
-      byFile.set(key, list)
-    })
-
-    // Within each file, group by first URI path segment.
-    // HTTP tabs (GET /api/users) → group by first path segment (/api).
-    // Non-HTTP tabs (commands, channels) have no slash structure → flat list under '_'.
-    const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'ANY'])
-
-    const fileGroups = [...byFile.entries()]
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([fileName, tabs]) => {
-        const byPrefix = new Map<string, TabEntry[]>()
-        tabs.forEach((tab) => {
-          const firstWord = tab.label.split(' ')[0]
-          const isHttp = HTTP_METHODS.has(firstWord)
-          let prefix: string
-          if (isHttp) {
-            const uri = tab.label.replace(/^[A-Z]+\s+/, '')
-            const segments = uri.split('/').filter(Boolean)
-            // Filament routes: group by the FIRST URL segment (the resource domain, e.g.
-            // "shop" from "/shop/products", "hr" from "/hr/employees").  Because resources
-            // are already scoped to their panel group (file group), this gives a clean
-            // second-level grouping: Admin Panel → shop → products/orders/…
-            // Regular routes: group by first path segment (e.g. "api" from "/api/users").
-            prefix = segments[0] ?? '/'
-          } else {
-            // Commands/channels: group by the part before the first colon or slash,
-            // or use '_flat' sentinel to render them without a prefix wrapper.
-            prefix = '_flat'
-          }
-          const list = byPrefix.get(prefix) ?? []
-          list.push(tab)
-          byPrefix.set(prefix, list)
-        })
-        const prefixGroups = [...byPrefix.entries()]
-          .sort(([a], [b]) => a.localeCompare(b))
-          .map(([prefix, tabs]) => ({ prefix, tabs }))
-        return { fileName, prefixGroups }
-      })
-
-    return { fileGroups }
-  }, [manifest])
+  const routeTabs = useMemo(() => manifest?.tabs ?? [], [manifest])
 
   const typeCounts = useMemo(() => {
     if (!tabState.data) return {} as Record<string, number>
@@ -304,7 +236,7 @@ export default function App() {
       />
       <div className="main">
         <LeftSidebar
-          fileGroups={groupedTabs.fileGroups ?? []}
+          tabs={routeTabs}
           activeId={activeTab?.id ?? null}
           loadingId={loadingTabId}
           onSelect={handleSelectTab}

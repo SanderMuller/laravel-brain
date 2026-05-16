@@ -24,6 +24,14 @@ class TabManifestEntry
         public string $routeFile = '',
         public string $category = 'Route',
         public string $panelId = '',
+        /** Total issues across the tab's lifecycle (security + n1 + fat method + fat class). */
+        public int $issueCount = 0,
+        /** none | low | medium | high | critical — highest security risk in the tab. */
+        public string $riskLevel = 'none',
+        public int $securityCount = 0,
+        public int $n1Count = 0,
+        public int $fatMethodCount = 0,
+        public int $fatClassCount = 0,
     ) {}
 }
 
@@ -92,6 +100,12 @@ class GraphSplitter
             $subgraph = $this->extractSubgraphForward($fullGraph, $fwdAdj, $seeds, $projectName, $analyzedAt);
             $subgraphs[$tabId] = $subgraph;
 
+            $routeNodeIds = [];
+            foreach ($tabRoutes as $r) {
+                $routeNodeIds[] = "route::{$r->method}::{$r->uri}";
+            }
+            $agg = $this->aggregateIssues($fullGraph, $subgraph, $routeNodeIds);
+
             $manifest[] = new TabManifestEntry(
                 id: $tabId,
                 label: $tabGroup,
@@ -100,6 +114,12 @@ class GraphSplitter
                 edgeCount: $subgraph->edgeCount(),
                 file: ".graph-{$tabId}.json",
                 routeFile: $this->relativeRouteFile($tabRoutes[0]->file),
+                issueCount: $agg['total'],
+                riskLevel: $agg['riskLevel'],
+                securityCount: $agg['security'],
+                n1Count: $agg['n1'],
+                fatMethodCount: $agg['fatMethod'],
+                fatClassCount: $agg['fatClass'],
             );
 
             // Help GC between large splits
@@ -281,6 +301,14 @@ class GraphSplitter
             if ($entry->panelId !== '') {
                 $tab['panelId'] = $entry->panelId;
             }
+            if ($entry->issueCount > 0) {
+                $tab['issueCount'] = $entry->issueCount;
+                $tab['riskLevel'] = $entry->riskLevel;
+                $tab['securityCount'] = $entry->securityCount;
+                $tab['n1Count'] = $entry->n1Count;
+                $tab['fatMethodCount'] = $entry->fatMethodCount;
+                $tab['fatClassCount'] = $entry->fatClassCount;
+            }
             $tabs[] = $tab;
         }
 
@@ -298,6 +326,65 @@ class GraphSplitter
         }
 
         return $json;
+    }
+
+    /**
+     * Aggregate every issue category surfaced for a tab:
+     *  - security issues live on the route node(s) (data.security.issues)
+     *  - N+1 / fat-method / fat-class flags live on lifecycle nodes
+     *    (actions, services, …) reachable in the tab's subgraph.
+     *
+     * @param  string[]  $routeNodeIds
+     * @return array{total: int, riskLevel: string, security: int, n1: int, fatMethod: int, fatClass: int}
+     */
+    private function aggregateIssues(Graph $fullGraph, Graph $subgraph, array $routeNodeIds): array
+    {
+        $order = ['none' => 0, 'low' => 1, 'medium' => 2, 'high' => 3, 'critical' => 4];
+        $security = 0;
+        $risk = 'none';
+
+        foreach ($routeNodeIds as $id) {
+            $node = $fullGraph->getNode($id);
+            if ($node === null) {
+                continue;
+            }
+            $sec = $node->data['security'] ?? null;
+            if (! is_array($sec)) {
+                continue;
+            }
+            $issues = $sec['issues'] ?? [];
+            if (is_array($issues)) {
+                $security += count($issues);
+            }
+            $level = is_string($sec['riskLevel'] ?? null) ? $sec['riskLevel'] : 'none';
+            if (($order[$level] ?? 0) > ($order[$risk] ?? 0)) {
+                $risk = $level;
+            }
+        }
+
+        $n1 = 0;
+        $fatMethod = 0;
+        $fatClass = 0;
+        foreach ($subgraph->nodes() as $node) {
+            if (($node->data['hasN1'] ?? false) === true) {
+                $n1++;
+            }
+            if (($node->data['fatMethod'] ?? false) === true) {
+                $fatMethod++;
+            }
+            if (($node->data['fatClass'] ?? false) === true) {
+                $fatClass++;
+            }
+        }
+
+        return [
+            'total' => $security + $n1 + $fatMethod + $fatClass,
+            'riskLevel' => $risk,
+            'security' => $security,
+            'n1' => $n1,
+            'fatMethod' => $fatMethod,
+            'fatClass' => $fatClass,
+        ];
     }
 
     // ── Private helpers ────────────────────────────────────────────────────
