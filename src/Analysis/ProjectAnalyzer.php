@@ -214,7 +214,8 @@ class ProjectAnalyzer
         $this->emit('step:done', ['step' => 'queries', 'count' => count($dbQueryMap), 'unit' => 'action', 'message' => '    Found DB query info for '.count($dbQueryMap).' action(s)']);
 
         $this->emit('step:start', ['step' => 'security', 'label' => 'Security surface map', 'message' => '  → Building security surface map...']);
-        $securityMap = $this->securityAnalyzer->analyze($routes, $middlewareRegistry, $controllers, $projectRoot);
+        $externalByFile = (new ExternalSecurityScanner)->scan($projectRoot);
+        $securityMap = $this->securityAnalyzer->analyze($routes, $middlewareRegistry, $controllers, $projectRoot, $externalByFile);
         $issueCount = array_sum(array_map(fn ($r) => count($r['issues']), $securityMap));
         $this->emit('step:done', ['step' => 'security', 'count' => $issueCount, 'unit' => 'issue', 'message' => "    Found {$issueCount} security issue(s) across ".count($securityMap).' route(s)']);
 

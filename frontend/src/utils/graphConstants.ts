@@ -180,6 +180,23 @@ export const SECURITY_ISSUE_META: Record<string, { icon: string; name: string }>
   XSS_DIRECT_OUTPUT:  { icon: '💉', name: 'XSS — Direct Output' },
   XSS_HTML_DECODE:    { icon: '🔓', name: 'XSS — HTML Decode'   },
   XSS_BLADE_UNESCAPED:{ icon: '📄', name: 'XSS — Blade {!! !!}' },
+  SQL_INJECTION:      { icon: '🛢️', name: 'SQL Injection'       },
+  OPEN_REDIRECT:      { icon: '↪️', name: 'Open Redirect'       },
+  SSRF:               { icon: '🌐', name: 'SSRF'                },
+  DEBUG_CODE:         { icon: '🐞', name: 'Debug Code Leak'     },
+  ENV_LEAK:           { icon: '🔑', name: 'Env Leak'            },
+  CSRF_BYPASS:        { icon: '🛡️', name: 'CSRF Bypass'         },
+  INSECURE_COOKIE:    { icon: '🍪', name: 'Insecure Cookie'     },
+  UNSAFE_STORAGE_PATH:{ icon: '📁', name: 'Unsafe Storage Path' },
+  FILE_UPLOAD_VALIDATION: { icon: '📎', name: 'File Upload Validation' },
+  UNSAFE_AUTH:        { icon: '🚪', name: 'Unsafe Auth'         },
+  UNSAFE_CRYPT:       { icon: '🔐', name: 'Unsafe Crypt'        },
+  ARTISAN_CALL:       { icon: '⚙️', name: 'Tainted Artisan Call' },
+  PROCESS_SHELL:      { icon: '💻', name: 'Shell Injection'     },
+  CONFIG_INJECTION:   { icon: '🧩', name: 'Config Injection'    },
+  TAINTED_VIEW_NAME:  { icon: '🖼️', name: 'Tainted View Name'   },
+  SESSION_FIXATION:   { icon: '🎫', name: 'Session Fixation'    },
+  MAIL_TAINTED_HEADER:{ icon: '✉️', name: 'Mail Header Injection' },
 }
 
 export const CC_TIERS = [

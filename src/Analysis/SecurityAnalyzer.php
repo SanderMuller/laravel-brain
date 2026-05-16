@@ -97,6 +97,9 @@ class SecurityAnalyzer
     /** Project root set at the start of analyze() so all sub-methods can read it. */
     private string $projectRoot = '';
 
+    /** @var array<string, list<array<string, mixed>>>|null */
+    private ?array $externalByFile = null;
+
     public function __construct()
     {
         $this->parser = new PhpFileParser;
@@ -112,13 +115,20 @@ class SecurityAnalyzer
      * @param  array<string, ControllerDefinition>  $controllers
      * @return array<string, array>
      */
+    /**
+     * @param  array<string, list<array<string, mixed>>>|null  $externalByFile
+     *         When provided, source-level findings come from the external
+     *         scanner instead of Brain's built-in AST scan (hybrid mode).
+     */
     public function analyze(
         array $routes,
         MiddlewareRegistry $middlewareRegistry,
         array $controllers,
         string $projectRoot,
+        ?array $externalByFile = null,
     ): array {
         $this->projectRoot = $projectRoot;
+        $this->externalByFile = $externalByFile;
         $results = [];
 
         foreach ($routes as $route) {
@@ -153,26 +163,46 @@ class SecurityAnalyzer
             }
 
             // ── 3. Controller / closure source scan ──────────────────────────
+            // Hybrid mode: when the external scanner ran, source-level
+            // findings come from it; otherwise fall back to the built-in
+            // AST scan. Route-policy + exposure logic above is unchanged.
             if ($route->controller !== '' && $route->controller !== 'Closure') {
                 $controllerDef = $controllers[$route->controller] ?? null;
                 if ($controllerDef !== null && is_file($controllerDef->file)) {
-                    $ctrlIssues = $this->scanControllerMethod(
-                        $controllerDef->file,
-                        $route->action,
-                        $controllerDef->useMap,
-                    );
-                    $issues = array_merge($issues, $ctrlIssues);
+                    if ($this->externalByFile !== null) {
+                        $issues = array_merge(
+                            $issues,
+                            $this->externalIssuesForMethod($controllerDef->file, $route->action),
+                        );
+                    } else {
+                        $issues = array_merge($issues, $this->scanControllerMethod(
+                            $controllerDef->file,
+                            $route->action,
+                            $controllerDef->useMap,
+                        ));
+                    }
                 }
             } elseif ($route->closureNode !== null) {
-                $useMap = $route->closureUseMap ?? [];
-                $closureIssues = $this->scanAstNode(
-                    $route->closureNode,
-                    $useMap,
-                    hasFormRequest: false,
-                    file: null,
-                );
-                $xssIssues = $this->scanForXss($route->closureNode, $useMap, null);
-                $issues = array_merge($issues, $closureIssues, $xssIssues);
+                if ($this->externalByFile !== null) {
+                    $issues = array_merge(
+                        $issues,
+                        $this->externalIssuesInRange(
+                            $route->file,
+                            $route->closureNode->getStartLine(),
+                            $route->closureNode->getEndLine(),
+                        ),
+                    );
+                } else {
+                    $useMap = $route->closureUseMap ?? [];
+                    $closureIssues = $this->scanAstNode(
+                        $route->closureNode,
+                        $useMap,
+                        hasFormRequest: false,
+                        file: null,
+                    );
+                    $xssIssues = $this->scanForXss($route->closureNode, $useMap, null);
+                    $issues = array_merge($issues, $closureIssues, $xssIssues);
+                }
             }
 
             // Deduplicate by (type, message) to avoid double-counting
@@ -302,6 +332,59 @@ class SecurityAnalyzer
         $xssIssues = $this->scanForXss($methodNode, $mergedUseMap, $file);
 
         return array_merge($massAssignIssues, $xssIssues);
+    }
+
+    /**
+     * Pull external-scanner findings scoped to a controller action's line
+     * range (parsing only to locate the method's start/end lines).
+     *
+     * @return array[]
+     */
+    private function externalIssuesForMethod(string $file, string $action): array
+    {
+        $parsed = $this->cachedParse($file);
+        if ($parsed['ast'] === null) {
+            return [];
+        }
+
+        $methodNode = $this->findClassMethod($parsed['ast'], $action);
+        if ($methodNode === null) {
+            return [];
+        }
+
+        return $this->externalIssuesInRange($file, $methodNode->getStartLine(), $methodNode->getEndLine());
+    }
+
+    /**
+     * Convert external-scanner findings within [startLine, endLine] of a
+     * file into Brain's SecurityIssue array shape.
+     *
+     * @return array[]
+     */
+    private function externalIssuesInRange(string $file, int $startLine, int $endLine): array
+    {
+        $real = realpath($file) ?: $file;
+        $findings = $this->externalByFile[$real] ?? null;
+        if ($findings === null) {
+            return [];
+        }
+
+        $issues = [];
+        foreach ($findings as $f) {
+            $line = $f['line'] ?? null;
+            if ($line !== null && ($line < $startLine || $line > $endLine)) {
+                continue;
+            }
+            $issues[] = (new SecurityIssue(
+                type: (string) $f['type'],
+                severity: (string) $f['severity'],
+                message: (string) $f['message'],
+                file: $file,
+                line: $line !== null ? (int) $line : null,
+            ))->toArray();
+        }
+
+        return $issues;
     }
 
     /**
