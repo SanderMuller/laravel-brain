@@ -117,8 +117,8 @@ class SecurityAnalyzer
      */
     /**
      * @param  array<string, list<array<string, mixed>>>|null  $externalByFile
-     *         When provided, source-level findings come from the external
-     *         scanner instead of Brain's built-in AST scan (hybrid mode).
+     *                                                                          When provided, source-level findings come from the external
+     *                                                                          scanner instead of Brain's built-in AST scan (hybrid mode).
      */
     public function analyze(
         array $routes,
