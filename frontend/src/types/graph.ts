@@ -88,11 +88,13 @@ export interface TabEntry {
   n1Count?: number
   fatMethodCount?: number
   fatClassCount?: number
+  changeStatus?: 'new' | 'changed' | 'unchanged'
 }
 
 export interface Manifest {
   project: string
   analyzedAt: string
+  previousAnalyzedAt?: string
   totalRoutes: number
   totalNodes: number
   totalEdges: number

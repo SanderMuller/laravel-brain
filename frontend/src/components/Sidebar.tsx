@@ -1,6 +1,6 @@
 import React, { useMemo, useRef, useCallback, useState } from 'react'
 import type { GraphData, GraphNode, GraphEdge, FlowStep, DbQuery } from '../types/graph'
-import { SECURITY_EXPOSURE_COLORS, SECURITY_RISK_COLORS, SECURITY_ISSUE_META, SECURITY_SEVERITY_LABELS } from '../utils/graphConstants'
+import { SECURITY_EXPOSURE_COLORS, SECURITY_EXPOSURE_COLORS_LIGHT, SECURITY_RISK_COLORS, SECURITY_ISSUE_META, SECURITY_SEVERITY_LABELS } from '../utils/graphConstants'
 import { FlowchartView } from './FlowchartView'
 import { FlowchartModal } from './FlowchartModal'
 import { SourceView } from './SourceView'
@@ -11,9 +11,9 @@ import { SequenceDiagramModal } from './SequenceDiagramModal'
 import { buildSequenceDiagram } from '../utils/sequenceUtils'
 import { Tooltip } from './Tooltip'
 
-const MIN_WIDTH = 200
+const MIN_WIDTH = 360
 const MAX_WIDTH = 640
-const DEFAULT_WIDTH = 320
+const DEFAULT_WIDTH = 380
 
 interface Props {
   selectedId: string | null
@@ -53,7 +53,7 @@ const TYPE_COLORS: Record<string, string> = {
   filament_relation_manager: '#0891B2',
 }
 
-type TabId = 'info' | 'flow' | 'source' | 'edges' | 'stress' | 'security'
+type TabId = 'info' | 'risks' | 'flow' | 'source' | 'edges' | 'stress'
 
 export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange }: Props) {
   const [width, setWidth] = useState(DEFAULT_WIDTH)
@@ -257,7 +257,7 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
     (activeTab === 'source' && !hasSource) ||
     (activeTab === 'edges' && !hasEdges) ||
     (activeTab === 'stress' && !isRoute) ||
-    (activeTab === 'security' && !isRoute)
+    (activeTab === 'risks' && !isRoute)
       ? 'info'
       : activeTab
 
@@ -265,13 +265,14 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
     ? node.data.security as { exposure: string; riskLevel: string; issues: Array<{ type: string; severity: string; message: string; file: string | null; line: number | null }> }
     : null
   const securityIssueCount = securityData ? securityData.issues.length : 0
+  const exposureColors = theme === 'light' ? SECURITY_EXPOSURE_COLORS_LIGHT : SECURITY_EXPOSURE_COLORS
 
-  const tabs: { id: TabId; label: string; count?: number; title: string }[] = [
+  const tabs: { id: TabId; label: string; count?: number; alert?: boolean; title: string }[] = [
     { id: 'info', label: 'Info', title: 'Identity, type, smells, and code metrics (lines, cyclomatic complexity, …).' },
+    ...(isRoute ? [{ id: 'risks' as TabId, label: 'Risks', count: securityIssueCount || undefined, alert: securityIssueCount > 0, title: 'Security findings: exposure level, authentication, rate-limiting, mass-assignment, and unvalidated input risks.' }] : []),
     ...(hasFlow ? [{ id: 'flow' as TabId, label: 'Flow', title: 'Control-flow steps through this method or request (and sequence diagram for routes).' }] : []),
-    ...(hasSource ? [{ id: 'source' as TabId, label: 'Source', title: 'Syntax-highlighted PHP source around this symbol.' }] : []),
     ...(hasEdges ? [{ id: 'edges' as TabId, label: 'Edges', count: incomingEdges.length + outgoingEdges.length, title: 'What calls or references this node (incoming) and what it calls (outgoing).' }] : []),
-    ...(isRoute ? [{ id: 'security' as TabId, label: '🔒 Security', count: securityIssueCount || undefined, title: 'Security surface analysis: exposure level, authentication, rate-limiting, mass-assignment, and unvalidated input risks.' }] : []),
+    ...(hasSource ? [{ id: 'source' as TabId, label: 'Source', title: 'Syntax-highlighted PHP source around this symbol.' }] : []),
     ...(isRoute ? [{ id: 'stress' as TabId, label: 'Stress', title: 'Send HTTP requests against this route and inspect responses (dev only).' }] : []),
   ]
 
@@ -303,22 +304,39 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
               </button>
             </Tooltip>
           </div>
-          <div className="sidebar-badges">
-            <Tooltip content="Graph node category (route, controller, model, …). Colors match the filter panel.">
-              <span className="type-badge" style={{ backgroundColor: color }}>
-                {node.type}
+          <div className="sidebar-eyebrow">
+            <span className="sidebar-eyebrow-dot" style={{ backgroundColor: color }} />
+            <span className="sidebar-eyebrow-type">{node.type.replace(/_/g, ' ')}</span>
+          </div>
+          <h2 className="sidebar-node-title">{node.label}</h2>
+          <div className="sidebar-chips">
+            {securityData && (() => {
+              const palette = exposureColors[securityData.exposure] ?? exposureColors['public']
+              return (
+                <span className="ins-chip" style={{ '--cc': palette.accent } as React.CSSProperties}>
+                  ● {palette.label}
+                </span>
+              )
+            })()}
+            {securityData && securityData.riskLevel !== 'none' && (
+              <span
+                className="ins-chip"
+                style={{ '--cc': SECURITY_RISK_COLORS[securityData.riskLevel] } as React.CSSProperties}
+              >
+                ⚠ {SECURITY_SEVERITY_LABELS[securityData.riskLevel]} risk · {securityIssueCount}
               </span>
-            </Tooltip>
-            {typeof node.data?.visibility === 'string' && (
-              <span className={`visibility-badge visibility-badge--${node.data.visibility}`}>
-                {node.data.visibility === 'public' && '🔓 '}
-                {node.data.visibility === 'protected' && '🛡️ '}
-                {node.data.visibility === 'private' && '🔒 '}
-                {node.data.visibility}
+            )}
+            {(incomingEdges.length + outgoingEdges.length) > 0 && (
+              <span className="ins-chip ins-chip--neutral">
+                Edges {incomingEdges.length + outgoingEdges.length}
+              </span>
+            )}
+            {filePath && (
+              <span className="ins-chip ins-chip--neutral" title={filePath}>
+                {filePath.split('/').slice(-2).join('/')}{highlightLine ? ` : ${highlightLine}` : ''}
               </span>
             )}
           </div>
-          <h2 className="sidebar-node-title">{node.label}</h2>
         </div>
 
         {/* Smell badges */}
@@ -348,31 +366,6 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
           </div>
         )}
 
-        {/* Security exposure badge (route nodes only) */}
-        {(() => {
-          if (node.type !== 'route' || !node.data?.security) return null
-          type SecData = { exposure: string; riskLevel: string; issues: Array<{ type: string; severity: string; message: string; file: string | null; line: number | null }> }
-          const sec = node.data.security as SecData
-          const palette = SECURITY_EXPOSURE_COLORS[sec.exposure] ?? SECURITY_EXPOSURE_COLORS['public']
-          const riskColor = SECURITY_RISK_COLORS[sec.riskLevel] ?? SECURITY_RISK_COLORS['none']
-          return (
-            <div className="sidebar-smells">
-              <Tooltip content={`Authentication exposure: this route is ${sec.exposure === 'public' ? 'publicly accessible with no auth' : sec.exposure === 'guest' ? 'only for unauthenticated users' : sec.exposure === 'authed' ? 'protected by auth middleware' : 'restricted to admin/elevated permissions'}`}>
-                <span className="smell-badge" style={{ background: palette.border + '22', color: palette.accent, borderColor: palette.border }}>
-                  🔒 {palette.label}
-                </span>
-              </Tooltip>
-              {sec.riskLevel !== 'none' && (
-                <Tooltip content={`${sec.issues.length} security issue(s) detected — see the Security tab for details.`}>
-                  <span className="smell-badge" style={{ background: riskColor + '22', color: riskColor, borderColor: riskColor }}>
-                    ⚠ {SECURITY_SEVERITY_LABELS[sec.riskLevel]} Risk
-                  </span>
-                </Tooltip>
-              )}
-            </div>
-          )
-        })()}
-
         {/* Tab bar */}
         <div className="sidebar-tab-bar">
           {tabs.map((tab) => (
@@ -383,9 +376,10 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                 onClick={() => setActiveTab(tab.id)}
               >
                 {tab.label}
-                {tab.id === 'security' && <span className="sidebar-tab-beta">beta</span>}
                 {tab.count !== undefined && (
-                  <span className="sidebar-tab-badge">{tab.count}</span>
+                  <span className={`sidebar-tab-badge${tab.alert ? ' sidebar-tab-badge--alert' : ''}`}>
+                    {tab.count}
+                  </span>
                 )}
               </button>
             </Tooltip>
@@ -398,6 +392,57 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
           {/* ── Info tab ── */}
           {safeTab === 'info' && (
             <>
+              <div className="ins-actions">
+                <button
+                  type="button"
+                  className="ins-action-btn"
+                  disabled={!hasSource}
+                  onClick={() => setActiveTab('source')}
+                >
+                  <svg className="ins-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                    <polyline points="15 3 21 3 21 9" />
+                    <line x1="10" y1="14" x2="21" y2="3" />
+                  </svg>
+                  Open file
+                </button>
+                <button
+                  type="button"
+                  className="ins-action-btn"
+                  onClick={() => navigator.clipboard.writeText(String(node.data?.uri ?? node.label))}
+                >
+                  <svg className="ins-action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                    <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+                  </svg>
+                  Copy URI
+                </button>
+              </div>
+
+              {(() => {
+                const cc = metrics?.cyclomaticComplexity ?? 0
+                const fanOut = outgoingEdges.length
+                const riskScore = { none: 0, low: 25, medium: 55, high: 80, critical: 100 }[securityData?.riskLevel ?? 'none'] ?? 0
+                const meters = [
+                  { label: 'Complexity', value: cc, pct: Math.min(100, cc * 6), tone: cc > 15 ? 'var(--danger)' : cc > 10 ? 'var(--warn)' : 'var(--ok)' },
+                  { label: 'Fan-out', value: fanOut, pct: Math.min(100, fanOut * 10), tone: fanOut > 8 ? 'var(--danger)' : fanOut > 4 ? 'var(--warn)' : 'var(--ok)' },
+                  { label: 'Risk', value: securityIssueCount, pct: riskScore, tone: riskScore >= 80 ? 'var(--danger)' : riskScore >= 55 ? 'var(--warn)' : 'var(--ok)' },
+                ]
+                return (
+                  <div className="ins-meters">
+                    {meters.map((m) => (
+                      <div key={m.label} className="ins-meter">
+                        <span className="ins-meter-label">{m.label}</span>
+                        <span className="ins-meter-track">
+                          <span className="ins-meter-fill" style={{ width: `${m.pct}%`, background: m.tone }} />
+                        </span>
+                        <span className="ins-meter-value">{m.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              })()}
+
               {metrics && (
                 <div className="sidebar-section sidebar-section--metrics">
                   <h3>Code Metrics</h3>
@@ -674,11 +719,11 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
           )}
 
           {/* ── Security tab ── */}
-          {safeTab === 'security' && isRoute && securityData && (
+          {safeTab === 'risks' && isRoute && securityData && (
             <div className="sidebar-section sidebar-section--security">
               {/* Exposure Level */}
               {(() => {
-                const palette = SECURITY_EXPOSURE_COLORS[securityData.exposure] ?? SECURITY_EXPOSURE_COLORS['public']
+                const palette = exposureColors[securityData.exposure] ?? exposureColors['public']
                 const exposureDescriptions: Record<string, string> = {
                   public:  'This route is publicly accessible — no authentication middleware detected.',
                   guest:   'This route is for unauthenticated users and redirects authenticated ones away.',
@@ -740,7 +785,7 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
           )}
 
           {/* ── Security tab (no data) ── */}
-          {safeTab === 'security' && isRoute && !securityData && (
+          {safeTab === 'risks' && isRoute && !securityData && (
             <div className="sidebar-section">
               <p style={{ opacity: 0.6, fontSize: 13 }}>Security data not available. Re-run <code>brain:scan</code> to generate it.</p>
             </div>

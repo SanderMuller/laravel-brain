@@ -31,7 +31,9 @@ export default function App() {
   const [loadingTabId, setLoadingTabId] = useState<string | null>(null)
   const [layout, setLayout] = useState('dagre')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [sidebarMode, setSidebarMode] = useState<'routes' | 'risks' | 'recent'>('routes')
   const [searchQuery, setSearchQuery] = useState('')
+  const [pendingRouteSelect, setPendingRouteSelect] = useState(false)
   const [visibleTypes, setVisibleTypes] = useState<Set<string>>(new Set(ALL_TYPES))
   const [rankDir, setRankDir] = useState<'LR' | 'TB'>('TB')
   const [stressTestNodeId, setStressTestNodeId] = useState<string | null>(null)
@@ -50,6 +52,7 @@ export default function App() {
 
     setActiveTab(tab)
     setSearchQuery('')
+    setPendingRouteSelect(true)
     load(tab.file)
   }, [activeTab, load])
 
@@ -73,8 +76,18 @@ export default function App() {
     setPrevTabData(tabState.data)
     if (tabState.data) {
       setVisibleTypes(new Set(ALL_TYPES))
+      // When the load came from picking a route/risk/recent card, focus its
+      // route node so the graph + inspector jump to it.
+      if (pendingRouteSelect) {
+        setPendingRouteSelect(false)
+        const routeNode = tabState.data.nodes.find((n) => n.type === 'route')
+        setSelectedId(routeNode ? routeNode.id : null)
+      } else {
+        setSelectedId(null)
+      }
+    } else {
+      setSelectedId(null)
     }
-    setSelectedId(null)
   }
 
   // Sync state with URL on back/forward
@@ -108,6 +121,15 @@ export default function App() {
   }
 
   const routeTabs = useMemo(() => manifest?.tabs ?? [], [manifest])
+
+  const highRiskCount = useMemo(
+    () => routeTabs.filter((t) => t.riskLevel === 'high' || t.riskLevel === 'critical').length,
+    [routeTabs],
+  )
+  const recentCount = useMemo(
+    () => routeTabs.filter((t) => t.changeStatus === 'new' || t.changeStatus === 'changed').length,
+    [routeTabs],
+  )
 
   const typeCounts = useMemo(() => {
     if (!tabState.data) return {} as Record<string, number>
@@ -213,26 +235,18 @@ export default function App() {
   return (
     <div className="app">
       <Toolbar
-        layout={layout}
         nodeCount={tabState.data?.meta.nodeCount ?? activeTab?.nodeCount ?? 0}
         edgeCount={tabState.data?.meta.edgeCount ?? activeTab?.edgeCount ?? 0}
         visibleCount={visibleNodeCount}
         activeTabLabel={activeTab?.label ?? 'graph'}
         graphData={tabState.data ?? null}
         analyzedAt={manifest.analyzedAt}
+        highRiskCount={highRiskCount}
+        onOpenRisks={() => setSidebarMode('risks')}
         theme={theme}
-        onLayoutChange={setLayout}
-        rankDir={rankDir}
-        onRankDirChange={setRankDir}
         onSearch={setSearchQuery}
         onToggleTheme={toggleTheme}
         graphRef={graphRef}
-        complexityOverlay={complexityOverlay}
-        onToggleComplexityOverlay={() => setComplexityOverlay(v => !v)}
-        securityOverlay={securityOverlay}
-        onToggleSecurityOverlay={() => setSecurityOverlay(v => !v)}
-        compact={compact}
-        onToggleCompact={() => setCompact(v => !v)}
       />
       <div className="main">
         <LeftSidebar
@@ -240,6 +254,11 @@ export default function App() {
           activeId={activeTab?.id ?? null}
           loadingId={loadingTabId}
           onSelect={handleSelectTab}
+          mode={sidebarMode}
+          onModeChange={setSidebarMode}
+          highRiskCount={highRiskCount}
+          recentCount={recentCount}
+          previousAnalyzedAt={manifest.previousAnalyzedAt}
           visibleTypes={visibleTypes}
           counts={typeCounts}
           onToggle={toggleType}
@@ -307,6 +326,11 @@ export default function App() {
               complexityOverlay={complexityOverlay}
               securityOverlay={securityOverlay}
               compact={compact}
+              onLayoutChange={setLayout}
+              onRankDirChange={setRankDir}
+              onToggleComplexityOverlay={() => setComplexityOverlay(v => !v)}
+              onToggleSecurityOverlay={() => setSecurityOverlay(v => !v)}
+              onToggleCompact={() => setCompact(v => !v)}
             />
           )}
         </div>

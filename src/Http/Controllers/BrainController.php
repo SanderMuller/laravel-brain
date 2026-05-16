@@ -44,7 +44,13 @@ class BrainController extends Controller
 
         $store = GraphStoreFactory::make();
         $store->ensureSchema();
-        $store->putManifest($result->manifestJson);
+
+        $manifestJson = $this->decorateManifestWithDiff(
+            $result->manifestJson,
+            $store->hasManifest() ? $store->getManifest() : null,
+        );
+
+        $store->putManifest($manifestJson);
 
         foreach ($result->subgraphs as $tabId => $subgraph) {
             $store->putSubgraph((string) $tabId, $subgraph->toJson());
@@ -316,6 +322,68 @@ class BrainController extends Controller
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /**
+     * Decorate each manifest tab with a changeStatus (new/changed/unchanged)
+     * relative to the previous scan, and record the previous scan timestamp.
+     * Fingerprint = nodeCount + edgeCount + riskLevel per tab.
+     */
+    private function decorateManifestWithDiff(string $newManifestJson, ?string $previousManifestJson): string
+    {
+        $new = json_decode($newManifestJson, true);
+
+        if (! is_array($new) || ! isset($new['tabs']) || ! is_array($new['tabs'])) {
+            return $newManifestJson;
+        }
+
+        $prevFingerprints = [];
+        $prevAnalyzedAt = null;
+
+        if ($previousManifestJson !== null) {
+            $prev = json_decode($previousManifestJson, true);
+            if (is_array($prev)) {
+                $prevAnalyzedAt = $prev['analyzedAt'] ?? null;
+                foreach (($prev['tabs'] ?? []) as $tab) {
+                    if (isset($tab['id'])) {
+                        $prevFingerprints[(string) $tab['id']] = $this->tabFingerprint($tab);
+                    }
+                }
+            }
+        }
+
+        foreach ($new['tabs'] as &$tab) {
+            $id = isset($tab['id']) ? (string) $tab['id'] : null;
+
+            if ($previousManifestJson === null || $id === null) {
+                $tab['changeStatus'] = 'unchanged';
+
+                continue;
+            }
+
+            if (! array_key_exists($id, $prevFingerprints)) {
+                $tab['changeStatus'] = 'new';
+            } elseif ($prevFingerprints[$id] !== $this->tabFingerprint($tab)) {
+                $tab['changeStatus'] = 'changed';
+            } else {
+                $tab['changeStatus'] = 'unchanged';
+            }
+        }
+        unset($tab);
+
+        if ($prevAnalyzedAt !== null) {
+            $new['previousAnalyzedAt'] = $prevAnalyzedAt;
+        }
+
+        return json_encode($new) ?: $newManifestJson;
+    }
+
+    /**
+     * @param  array<string, mixed>  $tab
+     */
+    private function tabFingerprint(array $tab): string
+    {
+        return ($tab['nodeCount'] ?? 0).':'.($tab['edgeCount'] ?? 0).':'.($tab['riskLevel'] ?? 'none');
+    }
 
     /**
      * Restrict stress-test targets to development hosts only.

@@ -282,6 +282,11 @@ interface Props {
   complexityOverlay: boolean
   securityOverlay?: boolean
   compact?: boolean
+  onLayoutChange: (layout: string) => void
+  onRankDirChange: (dir: 'LR' | 'TB') => void
+  onToggleComplexityOverlay: () => void
+  onToggleSecurityOverlay: () => void
+  onToggleCompact: () => void
 }
 
 export function GraphView({
@@ -298,6 +303,11 @@ export function GraphView({
   complexityOverlay,
   securityOverlay = false,
   compact = false,
+  onLayoutChange,
+  onRankDirChange,
+  onToggleComplexityOverlay,
+  onToggleSecurityOverlay,
+  onToggleCompact,
 }: Props) {
   const dark = theme === 'dark'
   // Previous alphas (0.07 / 0.1) made edge strokes nearly invisible while marker tips still showed.
@@ -573,6 +583,8 @@ export function GraphView({
   const nodeLastFiredRef = useRef<Map<string, number>>(new Map())
   const transformRef = useRef<ZoomTransform>(zoomIdentity)
   const zoomBehaviorRef = useRef<ZoomBehavior<SVGSVGElement, unknown> | null>(null)
+  const [zoomPct, setZoomPct] = useState(100)
+  const [showEdgeLabels, setShowEdgeLabels] = useState(true)
 
   const spawnPacket = useCallback(
     (edgeId: string, color: string, delay = 0, chained = false) => {
@@ -904,6 +916,7 @@ export function GraphView({
       .on('zoom', (ev) => {
         transformRef.current = ev.transform
         select(g).attr('transform', ev.transform.toString())
+        setZoomPct(Math.round(ev.transform.k * 100))
       })
 
     select(svg).call(zr)
@@ -943,6 +956,13 @@ export function GraphView({
     select(svg).call(zb.transform, tr)
   }, [nodes])
 
+  const zoomBy = useCallback((factor: number) => {
+    const svg = svgRef.current
+    const zb = zoomBehaviorRef.current
+    if (!svg || !zb) return
+    select(svg).transition().duration(150).call(zb.scaleBy, factor)
+  }, [])
+
   const toPng = useCallback(
     async (options?: { scale?: number }) => {
       const el = containerRef.current
@@ -951,6 +971,13 @@ export function GraphView({
         scale: options?.scale ?? 2,
         useCORS: true,
         backgroundColor: dark ? '#0a0c10' : '#f6f7f9',
+        // The frosted overlays use CSS color-mix(), which html2canvas can't
+        // parse; they're chrome, not graph content, so exclude them.
+        ignoreElements: (node) =>
+          node.classList?.contains('g-rails') ||
+          node.classList?.contains('g-toolbar') ||
+          node.classList?.contains('g-breadcrumb') ||
+          node.classList?.contains('g-zoom'),
       })
       return canvas.toDataURL('image/png')
     },
@@ -977,7 +1004,11 @@ export function GraphView({
   }, [nodes.length, fit, elements])
 
   return (
-    <div ref={containerRef} style={{ position: 'relative', width: '100%', height: '100%' }}>
+    <div
+      ref={containerRef}
+      className={`g-canvas ${showEdgeLabels ? '' : 'g-no-edge-labels'}`}
+      style={{ position: 'relative', width: '100%', height: '100%' }}
+    >
       <svg
         ref={svgRef}
         role="img"
@@ -1073,7 +1104,7 @@ export function GraphView({
                   style={{ pointerEvents: 'auto' }}
                 />
                 {lbl && op > 0.05 && (
-                  <g transform={`translate(${mid.x},${mid.y})`}>
+                  <g className="g-edge-label" transform={`translate(${mid.x},${mid.y})`}>
                     <text
                       textAnchor="middle"
                       dominantBaseline="middle"
@@ -1120,6 +1151,14 @@ export function GraphView({
             const labelColor = dark ? '#e6edf3' : '#0d1117'
             const mutedColor = dark ? 'rgba(255,255,255,0.5)' : 'rgba(0,0,0,0.5)'
 
+            const sec = n.data.security as { riskLevel?: string; issues?: unknown[] } | undefined
+            const risky = Boolean(
+              n.data.hasN1 ||
+              n.data.fatMethod ||
+              n.data.fatClass ||
+              (sec && ((sec.issues?.length ?? 0) > 0 || (sec.riskLevel && sec.riskLevel !== 'none')))
+            )
+
             const MAX_CLASS = 24
             const MAX_METHOD = 26
             const classDisplay = className.length > MAX_CLASS ? className.slice(0, MAX_CLASS - 1) + '…' : className
@@ -1128,6 +1167,7 @@ export function GraphView({
             return (
               <g
                 key={n.id}
+                className="g-node"
                 transform={`translate(${n.x},${n.y})`}
                 opacity={opacity}
                 style={{ pointerEvents: typeOk && opacity > 0.05 ? 'auto' : 'none', cursor: 'grab' }}
@@ -1148,6 +1188,15 @@ export function GraphView({
                   filter={Boolean(n.data.hasN1) && !complexityOverlay
                     ? 'drop-shadow(0 0 8px rgba(244,67,54,0.4))' : undefined}
                 />
+
+                {/* Risky indicator: red dot + glow halo on the top-right corner */}
+                {risky && (
+                  <g style={{ pointerEvents: 'none' }}>
+                    <circle cx={hw - 3} cy={-hh + 3} r={10} fill="#ef4444" opacity={0.22} />
+                    <circle cx={hw - 3} cy={-hh + 3} r={5} fill="#ef4444"
+                      stroke={bg} strokeWidth={1.5} />
+                  </g>
+                )}
 
                 {compact ? (
                   <>
@@ -1291,6 +1340,8 @@ export function GraphView({
         }}
       />
 
+      {(complexityOverlay || securityOverlay) && (
+      <div className="g-legends">
       {complexityOverlay && (
         <div className="cc-legend">
           <div className="cc-legend-title">Cyclomatic Complexity</div>
@@ -1333,6 +1384,100 @@ export function GraphView({
           ))}
         </div>
       )}
+      </div>
+      )}
+
+      <div className="g-rails" aria-hidden>
+        {[
+          { n: 1, label: 'Route', c: 'var(--nc-route)' },
+          { n: 2, label: 'Controller', c: 'var(--nc-controller)' },
+          { n: 3, label: 'Action', c: 'var(--nc-action)' },
+          { n: 4, label: 'Service · View', c: 'var(--nc-service)' },
+          { n: 5, label: 'Interface', c: 'var(--nc-interface)' },
+          { n: 6, label: 'Implementation', c: 'var(--nc-provider)' },
+        ].map((r) => (
+          <div key={r.n} className="g-rail">
+            <span className="g-rail-pill" style={{ '--rc': r.c } as React.CSSProperties}>{r.n}</span>
+            <span className="g-rail-label">{r.label}</span>
+          </div>
+        ))}
+      </div>
+
+      <div className="g-toolbar">
+        <select
+          className="g-tool-select"
+          value={layout}
+          onChange={(e) => onLayoutChange(e.target.value)}
+          title="Layout algorithm"
+        >
+          <option value="dagre">Hierarchical</option>
+          <option value="breadthfirst">Breadth-first</option>
+          <option value="cose-bilkent">Force</option>
+          <option value="circle">Circle</option>
+          <option value="grid">Grid</option>
+        </select>
+        <button
+          type="button"
+          className={`g-tool ${rankDir === 'TB' ? 'g-tool--on' : ''}`}
+          onClick={() => onRankDirChange(rankDir === 'TB' ? 'LR' : 'TB')}
+          title="Toggle orientation"
+        >
+          {rankDir === 'TB' ? 'Top-down' : 'Left-right'}
+        </button>
+        <span className="g-tool-sep" />
+        <button
+          type="button"
+          className={`g-tool ${showEdgeLabels ? 'g-tool--on' : ''}`}
+          onClick={() => setShowEdgeLabels((v) => !v)}
+        >
+          Edge labels
+        </button>
+        <button
+          type="button"
+          className={`g-tool ${complexityOverlay ? 'g-tool--on' : ''}`}
+          onClick={onToggleComplexityOverlay}
+        >
+          Complexity
+        </button>
+        <button
+          type="button"
+          className={`g-tool ${securityOverlay ? 'g-tool--on' : ''}`}
+          onClick={onToggleSecurityOverlay}
+        >
+          Security
+        </button>
+        <button
+          type="button"
+          className={`g-tool ${compact ? 'g-tool--on' : ''}`}
+          onClick={onToggleCompact}
+        >
+          Compact
+        </button>
+      </div>
+
+      <div className="g-breadcrumb">
+        {[
+          { label: 'Route', c: 'var(--nc-route)' },
+          { label: 'Controller', c: 'var(--nc-controller)' },
+          { label: 'Action', c: 'var(--nc-action)' },
+          { label: 'Service', c: 'var(--nc-service)' },
+          { label: 'Interface', c: 'var(--nc-interface)' },
+          { label: 'Impl', c: 'var(--nc-provider)' },
+        ].map((s, i, arr) => (
+          <span key={s.label} className="g-crumb">
+            <span className="g-crumb-dot" style={{ background: s.c }} />
+            {s.label}
+            {i < arr.length - 1 && <span className="g-crumb-arrow">→</span>}
+          </span>
+        ))}
+      </div>
+
+      <div className="g-zoom">
+        <button type="button" className="g-zoom-btn" onClick={() => zoomBy(0.8)} aria-label="Zoom out">−</button>
+        <span className="g-zoom-pct">{zoomPct}%</span>
+        <button type="button" className="g-zoom-btn" onClick={() => zoomBy(1.25)} aria-label="Zoom in">+</button>
+        <button type="button" className="g-zoom-btn g-zoom-fit" onClick={() => fit()} aria-label="Fit to view">⊡</button>
+      </div>
     </div>
   )
 }

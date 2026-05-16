@@ -7,7 +7,7 @@
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  color: var(--text-dim);
+  color: var(--dim);
   margin-bottom: 12px;
   padding: 0 16px;
   font-weight: 600;
@@ -15,7 +15,7 @@
 
 .flowchart-empty {
   padding: 12px 16px;
-  color: var(--text-dim);
+  color: var(--dim);
   font-size: 12px;
   font-style: italic;
 }
@@ -46,7 +46,7 @@
 }
 
 .flowchart-box--call     { background: rgba(33, 150, 243, 0.12); border-color: rgba(33, 150, 243, 0.3); color: #90CAF9; }
-.flowchart-box--assign   { background: var(--border); border-color: var(--border); color: var(--text-dim); }
+.flowchart-box--assign   { background: var(--border); border-color: var(--border); color: var(--dim); }
 .flowchart-box--return   { background: rgba(76, 175, 80, 0.12); border-color: rgba(76, 175, 80, 0.35); color: #A5D6A7; }
 .flowchart-box--throw    { background: rgba(244, 67, 54, 0.12); border-color: rgba(244, 67, 54, 0.35); color: #EF9A9A; }
 .flowchart-box--if       { background: rgba(255, 193, 7, 0.1); border-color: rgba(255, 193, 7, 0.35); color: #FFE082; border-radius: 4px; }
@@ -79,7 +79,7 @@
 .flowchart-arrow-line {
   width: 1px;
   height: 12px;
-  background: var(--text-dim);
+  background: var(--dim);
 }
 
 .flowchart-arrow-head {
@@ -87,7 +87,7 @@
   height: 0;
   border-left: 4px solid transparent;
   border-right: 4px solid transparent;
-  border-top: 5px solid var(--text-dim);
+  border-top: 5px solid var(--dim);
   margin-left: -3px;
 }
 
