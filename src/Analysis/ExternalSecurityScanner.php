@@ -65,7 +65,7 @@ class ExternalSecurityScanner
             return null;
         }
 
-        $outFile = tempnam(sys_get_temp_dir(), 'lb_sec_').'.json';
+        $outFile = sys_get_temp_dir().DIRECTORY_SEPARATOR.'lb_sec_'.bin2hex(random_bytes(8)).'.json';
 
         $cmd = array_merge(
             [PHP_BINARY, $binary, 'scan'],

@@ -271,7 +271,9 @@ class RouteAnalyzer
 
             $uri = '/'.ltrim($route->uri(), '/');
             $name = $route->getName() ?? '';
-            $middlewares = array_values(array_unique($route->gatherMiddleware()));
+            $middlewares = array_values(array_unique(
+                array_filter($route->gatherMiddleware(), 'is_string')
+            ));
 
             foreach ($route->methods() as $method) {
                 if (strtoupper($method) === 'HEAD') {
