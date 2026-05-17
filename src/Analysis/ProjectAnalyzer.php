@@ -76,7 +76,8 @@ class ProjectAnalyzer
         $this->middlewareAnalyzer = new MiddlewareAnalyzer;
         $this->controllerAnalyzer = new ControllerAnalyzer;
         $this->methodTracer = new MethodTracer;
-        $this->modelAnalyzer = new ModelAnalyzer;
+        $modelPaths = config('laravel-brain.models.paths', ['app/Models']);
+        $this->modelAnalyzer = new ModelAnalyzer(is_array($modelPaths) ? $modelPaths : []);
         $this->filamentAnalyzer = new FilamentAnalyzer;
         $this->queryTracer = new QueryTracer;
         $this->securityAnalyzer = new SecurityAnalyzer;
@@ -148,7 +149,7 @@ class ProjectAnalyzer
                 $modelFqcns[] = $edge->calleeFqcn;
             }
         }
-        $modelFqcns = array_unique($modelFqcns);
+        $modelFqcns = array_unique(array_merge($modelFqcns, $this->modelAnalyzer->discoverModels($projectRoot)));
         $models = $this->modelAnalyzer->analyze($projectRoot, $modelFqcns);
         $this->emit('step:done', ['step' => 'models', 'count' => count($models), 'unit' => 'model', 'message' => '    Found '.count($models).' model(s)']);
 
@@ -264,6 +265,13 @@ class ProjectAnalyzer
 
         $this->emit('step:start', ['step' => 'split', 'label' => 'Splitting into tab subgraphs', 'message' => '  → Splitting into tab subgraphs...']);
         $split = $this->graphSplitter->split($fullGraph, $routes, $commands, $channels, $schedules, $projectName, $analyzedAt, $filamentResult['panels'], $filamentResult['resources'], $filamentResult['pages']);
+
+        $erd = $this->graphSplitter->buildErdTab($models, $projectName, $analyzedAt);
+        if ($erd !== null) {
+            $split['subgraphs'][$erd['id']] = $erd['graph'];
+            $split['manifest'][] = $erd['manifest'];
+        }
+
         $this->emit('step:done', ['step' => 'split', 'count' => count($split['subgraphs']), 'unit' => 'tab', 'message' => '    '.count($split['subgraphs']).' tab(s) generated']);
 
         $manifestJson = $this->graphSplitter->buildManifestJson(

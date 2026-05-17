@@ -9,6 +9,7 @@ use LaraMint\LaravelBrain\Analysis\ConsoleCommandDefinition;
 use LaraMint\LaravelBrain\Analysis\FilamentPageDefinition;
 use LaraMint\LaravelBrain\Analysis\FilamentPanelDefinition;
 use LaraMint\LaravelBrain\Analysis\FilamentResourceDefinition;
+use LaraMint\LaravelBrain\Analysis\ModelDefinition;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 use LaraMint\LaravelBrain\Analysis\ScheduleEntry;
 
@@ -277,6 +278,124 @@ class GraphSplitter
         }
 
         return ['subgraphs' => $subgraphs, 'manifest' => $manifest];
+    }
+
+    /**
+     * Build the standalone "Model ERD" tab: one node per discovered model
+     * carrying its full attribute/cast/key metadata, plus one edge per
+     * relationship. Independent of routes — shows every model in the project.
+     *
+     * @param  array<string, ModelDefinition>  $models
+     * @return array{id: string, graph: Graph, manifest: TabManifestEntry}|null
+     */
+    public function buildErdTab(array $models, string $projectName, string $analyzedAt): ?array
+    {
+        if (empty($models)) {
+            return null;
+        }
+
+        $graph = new Graph;
+        $graph->setMeta(['project' => $projectName, 'analyzedAt' => $analyzedAt]);
+
+        $present = [];
+        $byShort = []; // short class name => FQCN (for same-namespace ::class refs)
+        foreach (array_keys($models) as $fqcn) {
+            $byShort[strtolower($this->shortName((string) $fqcn))] = (string) $fqcn;
+        }
+        foreach ($models as $fqcn => $def) {
+            $nodeId = "model::{$fqcn}";
+            $present[$fqcn] = $nodeId;
+            $graph->addNode(new Node(
+                id: $nodeId,
+                type: 'model',
+                label: $this->shortName($fqcn),
+                data: [
+                    'fqcn' => $fqcn,
+                    'file' => $def->file,
+                    'erd' => [
+                        'table' => $def->table,
+                        'primaryKey' => $def->primaryKey,
+                        'keyType' => $def->keyType,
+                        'incrementing' => $def->incrementing,
+                        'timestamps' => $def->timestamps,
+                        'softDeletes' => $def->usesSoftDeletes,
+                        'fillable' => $def->fillable,
+                        'guarded' => $def->guarded,
+                        'casts' => $def->casts,
+                        'dates' => $def->dates,
+                        'appends' => $def->appends,
+                        'accessors' => $def->accessors,
+                        'relationships' => $def->relationships,
+                    ],
+                ],
+            ));
+        }
+
+        $seenEdge = [];
+        foreach ($models as $fqcn => $def) {
+            $sourceId = "model::{$fqcn}";
+            foreach ($def->relationships as $rel) {
+                $related = ltrim((string) ($rel['related'] ?? ''), '\\');
+                if ($related === '') {
+                    continue;
+                }
+                if (! isset($present[$related]) && ! str_contains($related, '\\')) {
+                    // Same-namespace `Related::class` wasn't resolved to a FQCN
+                    // by the model parser — match it back by short name.
+                    $resolved = $byShort[strtolower($related)] ?? null;
+                    if ($resolved !== null) {
+                        $related = $resolved;
+                    }
+                }
+                if (! isset($present[$related])) {
+                    // Related model lives outside discovery (vendor / dynamic) —
+                    // add a lightweight placeholder so the edge still renders.
+                    $present[$related] = "model::{$related}";
+                    $graph->addNode(new Node(
+                        id: "model::{$related}",
+                        type: 'model',
+                        label: $this->shortName($related),
+                        data: ['fqcn' => $related, 'external' => true],
+                    ));
+                }
+                $targetId = "model::{$related}";
+                $key = $sourceId.'|'.$targetId.'|'.$rel['type'];
+                if (isset($seenEdge[$key])) {
+                    continue;
+                }
+                $seenEdge[$key] = true;
+                $graph->addEdge(new Edge(
+                    id: 'rel::'.md5($key),
+                    source: $sourceId,
+                    target: $targetId,
+                    label: (string) $rel['type'],
+                    type: 'relationship',
+                ));
+            }
+        }
+
+        $tabId = 'erd--models';
+
+        return [
+            'id' => $tabId,
+            'graph' => $graph,
+            'manifest' => new TabManifestEntry(
+                id: $tabId,
+                label: 'Model ERD',
+                routeCount: count($models),
+                nodeCount: $graph->nodeCount(),
+                edgeCount: $graph->edgeCount(),
+                file: ".graph-{$tabId}.json",
+                category: 'ERD',
+            ),
+        ];
+    }
+
+    private function shortName(string $fqcn): string
+    {
+        $pos = strrpos($fqcn, '\\');
+
+        return $pos === false ? $fqcn : substr($fqcn, $pos + 1);
     }
 
     public function buildManifestJson(
