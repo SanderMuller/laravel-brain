@@ -41,22 +41,51 @@ class RouteAnalyzer
     private bool $excludeVendor;
 
     /**
+     * Absolute path to the project root, captured at {@see self::analyze()} time
+     * so {@see self::resolveIncludePath()} can resolve Laravel path helpers like
+     * `base_path('routes/admin.php')` to a real filesystem location.
+     */
+    private ?string $projectRoot = null;
+
+    /**
+     * Glob patterns (relative to project root) of files that may register
+     * route files via `Route::group(filePath)` calls — typically service
+     * providers and bootstrap files. The analyzer scans these in addition to
+     * the route files themselves so that prefixes/middleware applied in a
+     * `RouteServiceProvider::boot()` are propagated to the routes inside the
+     * referenced file.
+     *
+     * @var string[]
+     */
+    private array $registrarPaths;
+
+    /**
      * @param  string[]  $routePaths  Glob patterns relative to the project root.
      *                                Defaults to ['routes/*\/*.php'].
      * @param  bool  $autoDiscover  When true, skip AST parsing and pull routes
      *                              from the running app's Route::getRoutes().
      * @param  bool  $excludeVendor  When auto-discover is on, drop any route
      *                               whose handler file lives under vendor/.
+     * @param  string[]  $registrarPaths  Glob patterns (relative to project root) of
+     *                                    files scanned for `Route::group(filePath)`
+     *                                    registrations — typically service providers
+     *                                    and bootstrap files.
      */
     public function __construct(
         array $routePaths = ['routes/*/*.php'],
         bool $autoDiscover = false,
         bool $excludeVendor = true,
+        array $registrarPaths = [
+            'app/Providers/*.php',
+            'app/Providers/*/*.php',
+            'bootstrap/app.php',
+        ],
     ) {
         $this->parser = new PhpFileParser;
         $this->routePaths = $routePaths ?: ['routes/*/*.php'];
         $this->autoDiscover = $autoDiscover;
         $this->excludeVendor = $excludeVendor;
+        $this->registrarPaths = $registrarPaths;
     }
 
     /**
@@ -64,6 +93,9 @@ class RouteAnalyzer
      */
     public function analyze(string $projectRoot): array
     {
+        $resolvedRoot = realpath($projectRoot);
+        $this->projectRoot = $resolvedRoot !== false ? $resolvedRoot : rtrim($projectRoot, '/');
+
         if ($this->autoDiscover) {
             return $this->discoverFromRouter($projectRoot);
         }
@@ -71,10 +103,20 @@ class RouteAnalyzer
         $routes = [];
         $routeFiles = $this->findRouteFiles($projectRoot);
 
+        // Scan service providers / bootstrap for `Route::group(filePath)`
+        // registrations. The recorded prefix/middleware/namespace/controller
+        // is used as a seed context when the referenced routes file is later
+        // extracted — without this, routes inside e.g. `routes/admin.php`
+        // would be emitted without the `prefix('api/admin')` applied by the
+        // RouteServiceProvider that loaded them.
+        $providerRegistrations = $this->scanProviderRegistrations($projectRoot);
+
         // First pass: parse every file once and collect every statically
-        // resolvable require/include target. Files pulled in via require are
-        // parsed only through the require (with the enclosing group's context),
-        // never standalone — otherwise they'd appear twice / without middleware.
+        // resolvable require/include target — both explicit `require`/`include`
+        // statements AND file paths passed to `Route::group(...)` (which Laravel
+        // requires internally). Files pulled in this way are parsed only
+        // through the inclusion (with the enclosing group's context), never
+        // standalone — otherwise they'd appear twice / without middleware.
         $parsedFiles = [];
         $includedFiles = [];
         foreach ($routeFiles as $file) {
@@ -90,22 +132,48 @@ class RouteAnalyzer
 
         // Second pass: extract from files that are not pulled in elsewhere.
         // Recursion into require'd files (RouteAnalyzer::extractIncludedFile)
-        // attaches their routes once, with the correct parent context.
+        // attaches their routes once, with the correct parent context. Files
+        // registered via a provider call (`Route::group($attrs, $path)`) get
+        // that call's context applied as the seed stack.
         foreach ($parsedFiles as $file => $parsed) {
             $real = realpath($file);
             if ($real !== false && isset($includedFiles[$real])) {
                 continue;
             }
 
-            $routes = array_merge($routes, $this->extractRoutes($parsed['ast'], $parsed['useMap'], $file));
+            $seedPrefix = [];
+            $seedMiddleware = [];
+            $seedNamespace = [];
+            $seedController = [];
+
+            if ($real !== false && isset($providerRegistrations[$real])) {
+                $ctx = $providerRegistrations[$real];
+                $seedPrefix = $ctx['prefix'] !== '' ? ['/'.ltrim($ctx['prefix'], '/')] : [''];
+                $seedMiddleware = $ctx['middlewares'] !== [] ? [$ctx['middlewares']] : [];
+                $seedNamespace = $ctx['namespace'] !== '' ? [$ctx['namespace']] : [];
+                $seedController = $ctx['controller'] !== '' ? [$ctx['controller']] : [];
+            }
+
+            $routes = array_merge($routes, $this->extractRoutes(
+                $parsed['ast'],
+                $parsed['useMap'],
+                $file,
+                $seedPrefix,
+                $seedMiddleware,
+                $seedNamespace,
+                $seedController,
+            ));
         }
 
         return $routes;
     }
 
     /**
-     * Statically resolves `__DIR__`/`__FILE__`/string-literal/concat include
-     * paths. Returns null for anything it can't resolve without executing code.
+     * Statically resolves include-path expressions: `__DIR__`, `__FILE__`,
+     * string literals, concatenations, and Laravel path helpers like
+     * `base_path('routes/admin.php')` / `app_path(...)` (resolved relative to
+     * the project root captured in {@see self::analyze()}). Returns null for
+     * anything it can't resolve without executing code.
      */
     public function resolveIncludePath(Node $expr, string $currentFile): ?string
     {
@@ -127,8 +195,60 @@ class RouteAnalyzer
 
             return $left.$right;
         }
+        if ($expr instanceof Node\Expr\FuncCall && $expr->name instanceof Node\Name) {
+            $resolved = $this->resolveLaravelPathHelper($expr, $currentFile);
+            if ($resolved !== null) {
+                return $resolved;
+            }
+        }
 
         return null;
+    }
+
+    /**
+     * Resolves Laravel's `*_path()` global helpers — base_path, app_path,
+     * config_path, database_path, public_path, resource_path, storage_path —
+     * to absolute filesystem paths using the project root captured at
+     * {@see self::analyze()} time. Returns null when the helper, its argument,
+     * or the project root can't be resolved statically.
+     */
+    private function resolveLaravelPathHelper(Node\Expr\FuncCall $call, string $currentFile): ?string
+    {
+        if ($this->projectRoot === null) {
+            return null;
+        }
+
+        /** @var array<string, string> $bases  helper => directory under project root */
+        $bases = [
+            'base_path' => '',
+            'app_path' => 'app',
+            'config_path' => 'config',
+            'database_path' => 'database',
+            'public_path' => 'public',
+            'resource_path' => 'resources',
+            'storage_path' => 'storage',
+        ];
+
+        $name = $call->name instanceof Node\Name ? $call->name->toString() : '';
+        if (! isset($bases[$name])) {
+            return null;
+        }
+
+        $sub = '';
+        if (! empty($call->args)) {
+            $arg = $call->args[0];
+            if ($arg instanceof Node\Arg) {
+                $resolved = $this->resolveIncludePath($arg->value, $currentFile);
+                if ($resolved === null) {
+                    return null;
+                }
+                $sub = $resolved;
+            }
+        }
+
+        $base = $this->projectRoot.($bases[$name] !== '' ? '/'.$bases[$name] : '');
+
+        return $sub !== '' ? $base.'/'.ltrim($sub, '/') : $base;
     }
 
     /**
@@ -170,8 +290,12 @@ class RouteAnalyzer
     }
 
     /**
-     * Collects realpaths of every statically resolvable require/include target
-     * within a parsed file.
+     * Collects realpaths of every statically resolvable file inclusion within
+     * a parsed file. This covers both explicit `require`/`include` statements
+     * AND file paths passed to `Route::group($attrs, $path)` /
+     * `Route::middleware(...)->group($path)`, because Laravel internally
+     * requires those files. Including them here ensures the analyzer doesn't
+     * re-parse them standalone (which would strip the parent group context).
      *
      * @param  Node\Stmt[]  $ast
      * @return string[]
@@ -198,16 +322,44 @@ class RouteAnalyzer
             public function enterNode(Node $node): ?int
             {
                 if ($node instanceof Node\Expr\Include_) {
-                    $path = $this->analyzer->resolveIncludePath($node->expr, $this->file);
-                    if ($path !== null) {
-                        $real = realpath($path);
-                        if ($real !== false) {
-                            $this->targets[] = $real;
+                    $this->collectPath($node->expr);
+
+                    return null;
+                }
+
+                if ($this->analyzer->isRouteGroupCall($node)) {
+                    /** @var Node\Expr\StaticCall|Node\Expr\MethodCall $node */
+                    foreach ($node->args as $arg) {
+                        if (! $arg instanceof Node\Arg) {
+                            continue;
                         }
+                        $value = $arg->value;
+                        // Attribute arrays and inline closures are not file
+                        // paths; the closure body is traversed via the parent
+                        // visitor in extractRoutes().
+                        if ($value instanceof Node\Expr\Array_
+                            || $value instanceof Node\Expr\Closure
+                            || $value instanceof Node\Expr\ArrowFunction
+                        ) {
+                            continue;
+                        }
+                        $this->collectPath($value);
                     }
                 }
 
                 return null;
+            }
+
+            private function collectPath(Node $expr): void
+            {
+                $path = $this->analyzer->resolveIncludePath($expr, $this->file);
+                if ($path === null) {
+                    return;
+                }
+                $real = realpath($path);
+                if ($real !== false) {
+                    $this->targets[] = $real;
+                }
             }
         };
 
@@ -215,6 +367,272 @@ class RouteAnalyzer
         $traverser->traverse($ast);
 
         return $visitor->targets;
+    }
+
+    /**
+     * True when the node is a `Route::group(...)` static call or a
+     * `...->group(...)` method chain whose root resolves to the `Route`
+     * facade. Used by both the include-target collector and the AST visitor
+     * to recognise `Route::group(filePath)` inclusions.
+     *
+     * @internal
+     */
+    public function isRouteGroupCall(Node $node): bool
+    {
+        if (! ($node instanceof Node\Expr\StaticCall || $node instanceof Node\Expr\MethodCall)) {
+            return false;
+        }
+        $method = $node->name instanceof Node\Identifier ? $node->name->toString() : null;
+        if ($method !== 'group') {
+            return false;
+        }
+
+        // Walk down the method-call chain to find the originating static call.
+        $current = $node;
+        while ($current instanceof Node\Expr\MethodCall) {
+            $current = $current->var;
+        }
+        if (! ($current instanceof Node\Expr\StaticCall)) {
+            return false;
+        }
+        if (! ($current->class instanceof Node\Name)) {
+            return false;
+        }
+        $parts = explode('\\', $current->class->toString());
+
+        return end($parts) === 'Route';
+    }
+
+    /**
+     * Scans configured registrar files (service providers, bootstrap/app.php,
+     * etc.) for `Route::group(filePath)` calls and returns a map of
+     * `realpath(routes file) => [prefix, middlewares, namespace, controller]`.
+     *
+     * Recognised shapes (any class short-named `Route` qualifies):
+     *   - Route::middleware('api')->prefix('api/admin')->group(base_path('routes/admin.php'));
+     *   - Route::group(['prefix' => 'api/admin', 'middleware' => 'api'], base_path(...));
+     *
+     * Calls whose routes-argument is a closure are ignored — those routes are
+     * defined inline and don't reference an external file.
+     *
+     * @return array<string, array{prefix: string, middlewares: string[], namespace: string, controller: string}>
+     */
+    private function scanProviderRegistrations(string $projectRoot): array
+    {
+        $root = rtrim($projectRoot, '/');
+        $registrations = [];
+
+        foreach ($this->registrarPaths as $pattern) {
+            $matches = glob($root.'/'.$pattern);
+            if ($matches === false) {
+                continue;
+            }
+            foreach ($matches as $file) {
+                if (! is_file($file) || ! is_readable($file)) {
+                    continue;
+                }
+                $parsed = $this->parser->parse($file);
+                if ($parsed['ast'] === null) {
+                    continue;
+                }
+                foreach ($this->extractGroupRegistrations($parsed['ast'], $file) as $real => $ctx) {
+                    // First registration wins (deterministic) — if a routes
+                    // file is registered twice, callers can disambiguate by
+                    // adjusting their providers.
+                    if (! isset($registrations[$real])) {
+                        $registrations[$real] = $ctx;
+                    }
+                }
+            }
+        }
+
+        return $registrations;
+    }
+
+    /**
+     * Walk a parsed registrar AST and pull out every `Route::group(filePath)`
+     * call, returning a `realpath => context` map.
+     *
+     * @param  Node\Stmt[]  $ast
+     * @return array<string, array{prefix: string, middlewares: string[], namespace: string, controller: string}>
+     */
+    private function extractGroupRegistrations(array $ast, string $file): array
+    {
+        $analyzer = $this;
+        $traverser = new NodeTraverser;
+        $visitor = new class($analyzer, $file) extends NodeVisitorAbstract
+        {
+            /** @var array<string, array{prefix: string, middlewares: string[], namespace: string, controller: string}> */
+            public array $registrations = [];
+
+            private RouteAnalyzer $analyzer;
+
+            private string $file;
+
+            public function __construct(RouteAnalyzer $analyzer, string $file)
+            {
+                $this->analyzer = $analyzer;
+                $this->file = $file;
+            }
+
+            public function enterNode(Node $node): ?int
+            {
+                if (! $this->analyzer->isRouteGroupCall($node)) {
+                    return null;
+                }
+                /** @var Node\Expr\StaticCall|Node\Expr\MethodCall $node */
+                [$prefix, $middlewares, $namespace, $controller] = $this->extractContext($node);
+
+                foreach ($node->args as $arg) {
+                    if (! $arg instanceof Node\Arg) {
+                        continue;
+                    }
+                    $value = $arg->value;
+                    if ($value instanceof Node\Expr\Array_
+                        || $value instanceof Node\Expr\Closure
+                        || $value instanceof Node\Expr\ArrowFunction
+                    ) {
+                        continue;
+                    }
+                    $path = $this->analyzer->resolveIncludePath($value, $this->file);
+                    if ($path === null) {
+                        continue;
+                    }
+                    $real = realpath($path);
+                    if ($real === false) {
+                        continue;
+                    }
+                    if (isset($this->registrations[$real])) {
+                        continue;
+                    }
+                    $this->registrations[$real] = [
+                        'prefix' => $prefix,
+                        'middlewares' => $middlewares,
+                        'namespace' => $namespace,
+                        'controller' => $controller,
+                    ];
+                }
+
+                return null;
+            }
+
+            /**
+             * @return array{0: string, 1: string[], 2: string, 3: string}
+             */
+            private function extractContext(Node\Expr\StaticCall|Node\Expr\MethodCall $node): array
+            {
+                $prefix = '';
+                $middlewares = [];
+                $namespace = '';
+                $controller = '';
+
+                if ($node instanceof Node\Expr\StaticCall) {
+                    // Route::group(['prefix' => ..., 'middleware' => ...], $path)
+                    foreach ($node->args as $arg) {
+                        if (! $arg instanceof Node\Arg || ! $arg->value instanceof Node\Expr\Array_) {
+                            continue;
+                        }
+                        foreach ($arg->value->items as $item) {
+                            if ($item === null) {
+                                continue;
+                            }
+                            $key = $item->key instanceof Node\Scalar\String_ ? $item->key->value : null;
+                            if ($key === 'prefix') {
+                                $prefix = $this->literalString($item->value);
+                            } elseif ($key === 'middleware') {
+                                $middlewares = $this->literalMiddlewareList($item->value);
+                            } elseif ($key === 'namespace') {
+                                $namespace = $this->literalString($item->value);
+                            }
+                        }
+                    }
+                } else {
+                    // ->group($path) on a Route::middleware(...)->prefix(...) chain
+                    $this->walkChain($node->var, $prefix, $middlewares, $namespace, $controller);
+                }
+
+                return [$prefix, $middlewares, $namespace, $controller];
+            }
+
+            private function walkChain(Node $node, string &$prefix, array &$middlewares, string &$namespace, string &$controller): void
+            {
+                if (! ($node instanceof Node\Expr\StaticCall || $node instanceof Node\Expr\MethodCall)) {
+                    return;
+                }
+                $method = $node->name instanceof Node\Identifier ? $node->name->toString() : null;
+                if ($method === 'middleware' && ! empty($node->args) && $node->args[0] instanceof Node\Arg) {
+                    $middlewares = array_merge($middlewares, $this->literalMiddlewareList($node->args[0]->value));
+                } elseif ($method === 'prefix' && ! empty($node->args) && $node->args[0] instanceof Node\Arg) {
+                    $prefix = $this->literalString($node->args[0]->value);
+                } elseif ($method === 'namespace' && ! empty($node->args) && $node->args[0] instanceof Node\Arg) {
+                    $namespace = $this->literalString($node->args[0]->value);
+                } elseif ($method === 'controller' && ! empty($node->args) && $node->args[0] instanceof Node\Arg) {
+                    $controller = $this->literalClassRef($node->args[0]->value);
+                }
+
+                $callee = $node instanceof Node\Expr\MethodCall ? $node->var : $node->class;
+                if ($callee instanceof Node) {
+                    $this->walkChain($callee, $prefix, $middlewares, $namespace, $controller);
+                }
+            }
+
+            private function literalString(Node $value): string
+            {
+                return $value instanceof Node\Scalar\String_ ? $value->value : '';
+            }
+
+            private function literalClassRef(Node $value): string
+            {
+                if ($value instanceof Node\Expr\ClassConstFetch && $value->class instanceof Node\Name) {
+                    return $value->class->toString();
+                }
+                if ($value instanceof Node\Scalar\String_) {
+                    return $value->value;
+                }
+
+                return '';
+            }
+
+            /**
+             * @return string[]
+             */
+            private function literalMiddlewareList(Node $value): array
+            {
+                if ($value instanceof Node\Scalar\String_) {
+                    return [$value->value];
+                }
+                if ($value instanceof Node\Expr\ClassConstFetch) {
+                    $resolved = $this->literalClassRef($value);
+
+                    return $resolved !== '' ? [$resolved] : [];
+                }
+                if ($value instanceof Node\Expr\Array_) {
+                    $result = [];
+                    foreach ($value->items as $item) {
+                        if ($item === null) {
+                            continue;
+                        }
+                        if ($item->value instanceof Node\Scalar\String_) {
+                            $result[] = $item->value->value;
+                        } elseif ($item->value instanceof Node\Expr\ClassConstFetch) {
+                            $resolved = $this->literalClassRef($item->value);
+                            if ($resolved !== '') {
+                                $result[] = $resolved;
+                            }
+                        }
+                    }
+
+                    return $result;
+                }
+
+                return [];
+            }
+        };
+
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+
+        return $visitor->registrations;
     }
 
     /**
@@ -678,8 +1096,7 @@ class RouteAnalyzer
                     }
                 }
 
-                $fullUri = implode('', $this->prefixStack).$chainPrefix.'/'.ltrim($uri, '/');
-                $fullUri = '/'.ltrim($fullUri, '/');
+                $fullUri = $this->joinUri(implode('', $this->prefixStack).$chainPrefix, $uri);
 
                 $middlewares = array_merge(
                     array_merge(...$this->middlewareStack ?: [[]]),
@@ -733,8 +1150,7 @@ class RouteAnalyzer
                     $this->walkChain($node->var, $chainPrefix, $chainMiddlewares, $chainNamespace);
                 }
 
-                $fullUri = implode('', $this->prefixStack).$chainPrefix.'/'.ltrim($uri, '/');
-                $fullUri = '/'.ltrim($fullUri, '/');
+                $fullUri = $this->joinUri(implode('', $this->prefixStack).$chainPrefix, $uri);
 
                 $middlewares = array_merge(
                     array_merge(...$this->middlewareStack ?: [[]]),
@@ -841,8 +1257,7 @@ class RouteAnalyzer
                         $controllerFqcn = rtrim($namespace, '\\').'\\'.ltrim($controllerFqcn, '\\');
                     }
                 }
-                $fullUri = implode('', $this->prefixStack).$chainPrefix.'/'.ltrim($uri, '/');
-                $fullUri = '/'.ltrim($fullUri, '/');
+                $fullUri = $this->joinUri(implode('', $this->prefixStack).$chainPrefix, $uri);
                 $middlewares = array_merge(
                     array_merge(...$this->middlewareStack ?: [[]]),
                     $chainMiddlewares
@@ -899,6 +1314,8 @@ class RouteAnalyzer
                 $this->middlewareStack[] = $middlewares;
                 $this->namespaceStack[] = $namespace;
                 $this->controllerStack[] = '';
+
+                $this->maybeLoadGroupFilePath($node);
             }
 
             private function enterGroupFromMethodChain(Node\Expr\MethodCall $node): void
@@ -914,6 +1331,66 @@ class RouteAnalyzer
                 $this->middlewareStack[] = $middlewares;
                 $this->namespaceStack[] = $namespace;
                 $this->controllerStack[] = $controller;
+
+                $this->maybeLoadGroupFilePath($node);
+            }
+
+            /**
+             * Handles `Route::group($attrs, base_path('routes/admin.php'))` and
+             * `Route::middleware(...)->prefix(...)->group(base_path(...))` — when
+             * the routes argument is a file path (not a closure), Laravel
+             * requires the file with the surrounding group context applied.
+             * The current prefix/middleware/namespace/controller stacks already
+             * include this group's contribution (callers push before calling
+             * this method), so we just forward them to extractIncludedFile().
+             */
+            private function maybeLoadGroupFilePath(Node\Expr\StaticCall|Node\Expr\MethodCall $node): void
+            {
+                foreach ($node->args as $arg) {
+                    if (! $arg instanceof Node\Arg) {
+                        continue;
+                    }
+                    $value = $arg->value;
+                    if ($value instanceof Node\Expr\Array_
+                        || $value instanceof Node\Expr\Closure
+                        || $value instanceof Node\Expr\ArrowFunction
+                    ) {
+                        continue;
+                    }
+
+                    $target = $this->routeAnalyzer->resolveIncludePath($value, $this->file);
+                    if ($target === null) {
+                        continue;
+                    }
+
+                    $real = realpath($target);
+                    if ($real === false || ! is_file($real) || ! is_readable($real)) {
+                        continue;
+                    }
+                    if (isset($this->visited[$real])) {
+                        continue;
+                    }
+
+                    $visited = $this->visited;
+                    $selfReal = realpath($this->file);
+                    if ($selfReal !== false) {
+                        $visited[$selfReal] = true;
+                    }
+                    $visited[$real] = true;
+
+                    $included = $this->routeAnalyzer->extractIncludedFile(
+                        $real,
+                        $this->prefixStack,
+                        $this->middlewareStack,
+                        $this->namespaceStack,
+                        $this->controllerStack,
+                        $visited,
+                    );
+
+                    foreach ($included as $route) {
+                        $this->routes[] = $route;
+                    }
+                }
             }
 
             private function walkChain(Node $node, string &$prefix, array &$middlewares, string &$namespace, string &$controller = ''): void
@@ -935,6 +1412,24 @@ class RouteAnalyzer
                     $callee = $node instanceof Node\Expr\MethodCall ? $node->var : $node->class;
                     $this->walkChain($callee, $prefix, $middlewares, $namespace, $controller);
                 }
+            }
+
+            /**
+             * Joins a (possibly multi-segment) prefix with a route URI the way
+             * Laravel's router does: a route URI of `'/'` (or `''`) inside a
+             * non-empty prefix collapses to the prefix itself — `/api/admin`,
+             * not `/api/admin/`. Always returns a path with a leading slash.
+             */
+            private function joinUri(string $prefix, string $uri): string
+            {
+                $uriPart = ltrim($uri, '/');
+                $prefixPart = trim($prefix, '/');
+
+                if ($uriPart === '') {
+                    return $prefixPart === '' ? '/' : '/'.$prefixPart;
+                }
+
+                return $prefixPart === '' ? '/'.$uriPart : '/'.$prefixPart.'/'.$uriPart;
             }
 
             private function handleInclude(Node\Expr\Include_ $node): void
