@@ -23,19 +23,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { php: '8.2', laravel: '^9.0',  testbench: '^7.0',  experimental: false }
-          - { php: '8.2', laravel: '^10.0', testbench: '^8.0',  experimental: false }
-          - { php: '8.2', laravel: '^11.0', testbench: '^9.0',  experimental: false }
-          - { php: '8.2', laravel: '^12.0', testbench: '^10.0', experimental: false }
-          - { php: '8.3', laravel: '^10.0', testbench: '^8.0',  experimental: false }
-          - { php: '8.3', laravel: '^11.0', testbench: '^9.0',  experimental: false }
-          - { php: '8.3', laravel: '^12.0', testbench: '^10.0', experimental: false }
-          - { php: '8.3', laravel: '^13.0', testbench: '^11.0', experimental: false }
-          - { php: '8.4', laravel: '^11.0', testbench: '^9.0',  experimental: false }
-          - { php: '8.4', laravel: '^12.0', testbench: '^10.0', experimental: false }
-          - { php: '8.4', laravel: '^13.0', testbench: '^11.0', experimental: false }
-          - { php: '8.5', laravel: '^12.0', testbench: '^10.0', experimental: true  }
-          - { php: '8.5', laravel: '^13.0', testbench: '^11.0', experimental: true  }
+          - { php: '8.2', laravel: '^9.0',  testbench: '^7.0',  phpstan: false, experimental: false }
+          - { php: '8.2', laravel: '^10.0', testbench: '^8.0',  phpstan: false, experimental: false }
+          - { php: '8.2', laravel: '^11.0', testbench: '^9.0',  phpstan: true,  experimental: false }
+          - { php: '8.2', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: false }
+          - { php: '8.3', laravel: '^10.0', testbench: '^8.0',  phpstan: false, experimental: false }
+          - { php: '8.3', laravel: '^11.0', testbench: '^9.0',  phpstan: true,  experimental: false }
+          - { php: '8.3', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: false }
+          - { php: '8.3', laravel: '^13.0', testbench: '^11.0', phpstan: true,  experimental: false }
+          - { php: '8.4', laravel: '^11.0', testbench: '^9.0',  phpstan: true,  experimental: false }
+          - { php: '8.4', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: false }
+          - { php: '8.4', laravel: '^13.0', testbench: '^11.0', phpstan: true,  experimental: false }
+          - { php: '8.5', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: true  }
+          - { php: '8.5', laravel: '^13.0', testbench: '^11.0', phpstan: true,  experimental: true  }
     name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }}
     continue-on-error: ${{ matrix.experimental }}
     steps:
@@ -49,6 +49,13 @@ jobs:
           extensions: dom, curl, libxml, mbstring, zip
           coverage: none
 
+      - name: Allow EOL/insecure framework versions in CI
+        run: composer config audit.block-insecure false
+
+      - name: Drop Larastan (unsupported on Laravel < 11)
+        if: ${{ !matrix.phpstan }}
+        run: composer remove --dev --no-update --no-interaction larastan/larastan
+
       - name: Pin Laravel & Testbench
         run: >
           composer require --no-update --no-interaction
@@ -57,12 +64,13 @@ jobs:
           "orchestra/testbench:${{ matrix.testbench }}"
 
       - name: Install dependencies
-        run: composer update --prefer-dist --no-interaction --no-progress --prefer-stable
+        run: composer update --prefer-dist --no-interaction --no-progress --prefer-stable -W
 
       - name: Laravel Pint - Lint test
         run: composer test:lint
 
       - name: PHPStan - Static Analysis test
+        if: ${{ matrix.phpstan }}
         run: composer test:types
 
       - name: Pest - Unit test
