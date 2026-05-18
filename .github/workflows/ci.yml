@@ -2,15 +2,42 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - main
+      - 'v[0-9]*'
+      - '!*-dev*'
+      - '!*-beta*'
 
   pull_request:
-    branches: [ "main", "master" ]
+    branches:
+      - main
+      - 'v[0-9]*'
+      - '!*-dev*'
+      - '!*-beta*'
 
 jobs:
 
   PHP:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.2', laravel: '^9.0',  testbench: '^7.0',  experimental: false }
+          - { php: '8.2', laravel: '^10.0', testbench: '^8.0',  experimental: false }
+          - { php: '8.2', laravel: '^11.0', testbench: '^9.0',  experimental: false }
+          - { php: '8.2', laravel: '^12.0', testbench: '^10.0', experimental: false }
+          - { php: '8.3', laravel: '^10.0', testbench: '^8.0',  experimental: false }
+          - { php: '8.3', laravel: '^11.0', testbench: '^9.0',  experimental: false }
+          - { php: '8.3', laravel: '^12.0', testbench: '^10.0', experimental: false }
+          - { php: '8.3', laravel: '^13.0', testbench: '^11.0', experimental: false }
+          - { php: '8.4', laravel: '^11.0', testbench: '^9.0',  experimental: false }
+          - { php: '8.4', laravel: '^12.0', testbench: '^10.0', experimental: false }
+          - { php: '8.4', laravel: '^13.0', testbench: '^11.0', experimental: false }
+          - { php: '8.5', laravel: '^12.0', testbench: '^10.0', experimental: true  }
+          - { php: '8.5', laravel: '^13.0', testbench: '^11.0', experimental: true  }
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }}
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,12 +45,19 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php }}
           extensions: dom, curl, libxml, mbstring, zip
           coverage: none
 
+      - name: Pin Laravel & Testbench
+        run: >
+          composer require --no-update --no-interaction
+          "illuminate/console:${{ matrix.laravel }}"
+          "illuminate/support:${{ matrix.laravel }}"
+          "orchestra/testbench:${{ matrix.testbench }}"
+
       - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: composer update --prefer-dist --no-interaction --no-progress --prefer-stable
 
       - name: Laravel Pint - Lint test
         run: composer test:lint
