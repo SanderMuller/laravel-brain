@@ -61,9 +61,21 @@ jobs:
         if: ${{ !matrix.phpstan }}
         run: composer remove --dev --no-update --no-interaction larastan/larastan orchestra/testbench
 
+      # Pest 2 (PHPUnit 10) for L9/L10. symfony/polyfill-php85 provides the
+      # native-PHP-8.5 array_first() used by tests/Pest.php — the modern dev
+      # tree pulls it transitively; the stripped legacy tree does not.
       - name: Downgrade Pest for Laravel < 11
         if: ${{ !matrix.phpstan }}
-        run: composer require --dev --no-update --no-interaction "pestphp/pest:^2.0"
+        run: >
+          composer require --dev --no-update --no-interaction
+          "pestphp/pest:^2.0"
+          "symfony/polyfill-php85:*"
+
+      # Pest 2 has no pest() helper; rewrite the Pest 3 bootstrap call to the
+      # Pest 2 equivalent (uses()). CI-only, ephemeral patch of tests/Pest.php.
+      - name: Patch test bootstrap for Pest 2
+        if: ${{ !matrix.phpstan }}
+        run: sed -i 's/pest()->extend(/uses(/' tests/Pest.php
 
       - name: Pin Laravel & Testbench (Laravel 11+)
         if: ${{ matrix.phpstan }}
@@ -73,12 +85,14 @@ jobs:
           "illuminate/support:${{ matrix.laravel }}"
           "orchestra/testbench:${{ matrix.testbench }}"
 
+      # Tests exercise Routing/Container/Events; Testbench used to pull the
+      # full framework, so pin laravel/framework directly here. Its runtime
+      # deps don't pin PHPUnit, so no conflict with Pest 2.
       - name: Pin Laravel (Laravel < 11)
         if: ${{ !matrix.phpstan }}
         run: >
           composer require --no-update --no-interaction
-          "illuminate/console:${{ matrix.laravel }}"
-          "illuminate/support:${{ matrix.laravel }}"
+          "laravel/framework:${{ matrix.laravel }}"
 
       - name: Install dependencies
         run: composer update --prefer-dist --no-interaction --no-progress --prefer-stable -W
