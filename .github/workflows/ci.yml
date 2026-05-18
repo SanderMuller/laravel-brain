@@ -2,15 +2,42 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "master" ]
+    branches:
+      - main
+      - 'v[0-9]*'
+      - '!*-dev*'
+      - '!*-beta*'
 
   pull_request:
-    branches: [ "main", "master" ]
+    branches:
+      - main
+      - 'v[0-9]*'
+      - '!*-dev*'
+      - '!*-beta*'
 
 jobs:
 
   PHP:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { php: '8.2', laravel: '^9.0',  testbench: '^7.0',  phpstan: false, experimental: false }
+          - { php: '8.2', laravel: '^10.0', testbench: '^8.0',  phpstan: false, experimental: false }
+          - { php: '8.2', laravel: '^11.0', testbench: '^9.0',  phpstan: true,  experimental: false }
+          - { php: '8.2', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: false }
+          - { php: '8.3', laravel: '^10.0', testbench: '^8.0',  phpstan: false, experimental: false }
+          - { php: '8.3', laravel: '^11.0', testbench: '^9.0',  phpstan: true,  experimental: false }
+          - { php: '8.3', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: false }
+          - { php: '8.3', laravel: '^13.0', testbench: '^11.0', phpstan: true,  experimental: false }
+          - { php: '8.4', laravel: '^11.0', testbench: '^9.0',  phpstan: true,  experimental: false }
+          - { php: '8.4', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: false }
+          - { php: '8.4', laravel: '^13.0', testbench: '^11.0', phpstan: true,  experimental: false }
+          - { php: '8.5', laravel: '^12.0', testbench: '^10.0', phpstan: true,  experimental: true  }
+          - { php: '8.5', laravel: '^13.0', testbench: '^11.0', phpstan: true,  experimental: true  }
+    name: PHP ${{ matrix.php }} - Laravel ${{ matrix.laravel }}
+    continue-on-error: ${{ matrix.experimental }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,21 +45,50 @@ jobs:
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
-          php-version: '8.3'
+          php-version: ${{ matrix.php }}
           extensions: dom, curl, libxml, mbstring, zip
           coverage: none
 
+      - name: Allow EOL/insecure framework versions in CI
+        run: composer config audit.block-insecure false
+
+      # Laravel 9/10 cells (matrix.phpstan == false): the modern dev toolchain
+      # (Larastan 3, Pest 3 / Collision 8) requires Laravel 11+. Drop Larastan
+      # and downgrade Pest to ^2 so the suite can install on these versions.
+      - name: Drop Larastan (unsupported on Laravel < 11)
+        if: ${{ !matrix.phpstan }}
+        run: composer remove --dev --no-update --no-interaction larastan/larastan
+
+      - name: Downgrade Pest for Laravel < 11
+        if: ${{ !matrix.phpstan }}
+        run: composer require --dev --no-update --no-interaction "pestphp/pest:^2.0"
+
+      - name: Pin Laravel & Testbench
+        run: >
+          composer require --no-update --no-interaction
+          "illuminate/console:${{ matrix.laravel }}"
+          "illuminate/support:${{ matrix.laravel }}"
+          "orchestra/testbench:${{ matrix.testbench }}"
+
       - name: Install dependencies
-        run: composer install --prefer-dist --no-interaction --no-progress
+        run: composer update --prefer-dist --no-interaction --no-progress --prefer-stable -W
 
       - name: Laravel Pint - Lint test
         run: composer test:lint
 
       - name: PHPStan - Static Analysis test
+        if: ${{ matrix.phpstan }}
         run: composer test:types
 
       - name: Pest - Unit test
+        if: ${{ matrix.phpstan }}
         run: composer test:unit
+
+      # Pest 2 lacks the arch()->preset() API used by tests/ArchTest.php,
+      # so run only the Unit/Feature suites on Laravel 9/10.
+      - name: Pest - Unit test (Laravel < 11, no ArchTest)
+        if: ${{ !matrix.phpstan }}
+        run: ./vendor/bin/pest tests/Unit tests/Feature --order-by=random
 
   frontend:
     runs-on: ubuntu-latest

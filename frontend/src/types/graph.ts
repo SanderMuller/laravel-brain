@@ -49,6 +49,23 @@ export interface GraphData {
   edges: GraphEdge[]
 }
 
+/** Shape of `node.data.erd` for model nodes in the Model ERD tab. */
+export interface ErdModelData {
+  table: string
+  primaryKey: string
+  keyType: string
+  incrementing: boolean
+  timestamps: boolean
+  softDeletes: boolean
+  fillable: string[]
+  guarded: string[]
+  casts: Record<string, string>
+  dates: string[]
+  appends: string[]
+  accessors: string[]
+  relationships: { type: string; related: string }[]
+}
+
 /** One node or edge in the format produced from `GraphData` (Cytoscape-compatible shape). */
 export interface GraphElement {
   data: Record<string, unknown> & {

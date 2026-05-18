@@ -146,6 +146,28 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Model Search Paths
+    // -------------------------------------------------------------------------
+    // Directories (relative to the project root) scanned to discover Eloquent
+    // models for the "Model ERD" tab. Every *.php file under each directory is
+    // parsed recursively; classes whose `extends` chain reaches Eloquent's
+    // Model / Authenticatable / Pivot are treated as models.
+    //
+    // Leave the array empty to fall back to scanning every PSR-4 source root
+    // declared in your composer.json (slower on large apps, but zero-config).
+    //
+    // Examples:
+    //   'app/Models'
+    //   'app/Domain/Billing/Models'
+    //   'src/Models'
+    //
+    'models' => [
+        'paths' => [
+            'app/Models',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Livewire Component Search Paths
     // -------------------------------------------------------------------------
     // Directories (relative to project root) that are searched when resolving

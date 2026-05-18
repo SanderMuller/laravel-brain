@@ -243,8 +243,11 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
       key !== 'members' &&
       key !== 'validationRules' &&
       key !== 'security' &&
+      key !== 'erd' &&
       !(Array.isArray(val) && val.length === 0)
   )
+
+  const erd = node.data?.erd as import('../types/graph').ErdModelData | undefined
 
   const hasFlow = flowSteps.length > 0 || !!sequenceDiagram
   const hasSource = !!filePath
@@ -579,6 +582,37 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                       </li>
                     ))}
                   </ul>
+                </div>
+              )}
+
+              {erd && (
+                <div className="sidebar-section">
+                  <h3>Model Schema</h3>
+                  <div className="prop-row"><span className="prop-key">table</span><span className="prop-value">{erd.table || '—'}</span></div>
+                  <div className="prop-row"><span className="prop-key">primary key</span><span className="prop-value">{erd.primaryKey} ({erd.keyType})</span></div>
+                  <div className="prop-row"><span className="prop-key">timestamps</span><span className="prop-value">{erd.timestamps ? 'yes' : 'no'}</span></div>
+                  <div className="prop-row"><span className="prop-key">soft deletes</span><span className="prop-value">{erd.softDeletes ? 'yes' : 'no'}</span></div>
+                  {erd.fillable?.length > 0 && (
+                    <div className="prop-row"><span className="prop-key">fillable</span><span className="prop-value">{erd.fillable.join(', ')}</span></div>
+                  )}
+                  {erd.guarded?.length > 0 && (
+                    <div className="prop-row"><span className="prop-key">guarded</span><span className="prop-value">{erd.guarded.join(', ')}</span></div>
+                  )}
+                  {Object.keys(erd.casts ?? {}).length > 0 && (
+                    <div className="prop-row"><span className="prop-key">casts</span><span className="prop-value">{Object.entries(erd.casts).map(([k, v]) => `${k}: ${v}`).join(', ')}</span></div>
+                  )}
+                  {erd.dates?.length > 0 && (
+                    <div className="prop-row"><span className="prop-key">dates</span><span className="prop-value">{erd.dates.join(', ')}</span></div>
+                  )}
+                  {erd.appends?.length > 0 && (
+                    <div className="prop-row"><span className="prop-key">appends</span><span className="prop-value">{erd.appends.join(', ')}</span></div>
+                  )}
+                  {erd.accessors?.length > 0 && (
+                    <div className="prop-row"><span className="prop-key">accessors</span><span className="prop-value">{erd.accessors.join(', ')}</span></div>
+                  )}
+                  {erd.relationships?.length > 0 && (
+                    <div className="prop-row"><span className="prop-key">relationships</span><span className="prop-value">{erd.relationships.map(r => `${r.type}(${r.related})`).join(', ')}</span></div>
+                  )}
                 </div>
               )}
 
