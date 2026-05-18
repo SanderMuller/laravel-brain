@@ -327,8 +327,9 @@ class RouteAnalyzer
                     return null;
                 }
 
-                if ($this->analyzer->isRouteGroupCall($node)) {
-                    /** @var Node\Expr\StaticCall|Node\Expr\MethodCall $node */
+                if (($node instanceof Node\Expr\StaticCall || $node instanceof Node\Expr\MethodCall)
+                    && $this->analyzer->isRouteGroupCall($node)
+                ) {
                     foreach ($node->args as $arg) {
                         if (! $arg instanceof Node\Arg) {
                             continue;
@@ -477,10 +478,12 @@ class RouteAnalyzer
 
             public function enterNode(Node $node): ?int
             {
+                if (! ($node instanceof Node\Expr\StaticCall || $node instanceof Node\Expr\MethodCall)) {
+                    return null;
+                }
                 if (! $this->analyzer->isRouteGroupCall($node)) {
                     return null;
                 }
-                /** @var Node\Expr\StaticCall|Node\Expr\MethodCall $node */
                 [$prefix, $middlewares, $namespace, $controller] = $this->extractContext($node);
 
                 foreach ($node->args as $arg) {
@@ -570,10 +573,10 @@ class RouteAnalyzer
                     $controller = $this->literalClassRef($node->args[0]->value);
                 }
 
+                // MethodCall->var is Expr, StaticCall->class is Name|Expr — both Node subtypes.
+                // walkChain itself short-circuits on anything that isn't a StaticCall or MethodCall.
                 $callee = $node instanceof Node\Expr\MethodCall ? $node->var : $node->class;
-                if ($callee instanceof Node) {
-                    $this->walkChain($callee, $prefix, $middlewares, $namespace, $controller);
-                }
+                $this->walkChain($callee, $prefix, $middlewares, $namespace, $controller);
             }
 
             private function literalString(Node $value): string
