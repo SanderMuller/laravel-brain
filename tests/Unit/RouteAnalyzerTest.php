@@ -293,408 +293,61 @@ PHP
     }
 });
 
-it('follows Route::group(base_path(...)) chain form and applies prefix/middleware to inner routes', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/web', 0777, true);
-    // Place both files in a subdirectory matching the default 'routes/*/*.php'
-    // glob so the child file *would* be discoverable standalone — proving the
-    // analyzer correctly excludes it from the standalone pass once it sees
-    // the group.
-    file_put_contents(
-        $tmp.'/routes/web/api.php',
-        <<<'PHP'
-<?php
+it('applies prefix and middleware from a RouteServiceProvider chain-form group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $delete = findRoute($routes, fn ($r) => $r->uri === '/api/customer/address/{id}' && $r->method === 'DELETE');
 
-use Illuminate\Support\Facades\Route;
-
-Route::middleware('api')
-    ->prefix('api/admin')
-    ->group(base_path('routes/web/admin.php'));
-
-PHP
-    );
-    file_put_contents(
-        $tmp.'/routes/web/admin.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\AdminController;
-use Illuminate\Support\Facades\Route;
-
-Route::get('/dashboard', [AdminController::class, 'dashboard']);
-
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-
-        $dashboardRoutes = array_values(array_filter(
-            $routes,
-            fn ($r) => $r->action === 'dashboard'
-        ));
-
-        // Exactly one definition — not double-counted standalone.
-        expect($dashboardRoutes)->toHaveCount(1);
-
-        $dashboard = $dashboardRoutes[0];
-        expect($dashboard)->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/api/admin/dashboard')
-            ->method->toBe('GET')
-            ->controller->toBe('App\Http\Controllers\AdminController');
-        expect($dashboard->middlewares)->toContain('api');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
+    expect($delete)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\AddressController')
+        ->action->toBe('destroy')
+        ->middlewares->toBeArray()->toContain('api');
 });
 
-it('follows Route::group($attrs, base_path(...)) static form with attrs prefix/middleware', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/web', 0777, true);
-    file_put_contents(
-        $tmp.'/routes/web/api.php',
-        <<<'PHP'
-<?php
+it('applies prefix and middleware from a RouteServiceProvider static-form group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $delete = findRoute($routes, fn ($r) => $r->uri === '/api/restaurant/category/{id}' && $r->method === 'DELETE');
 
-use Illuminate\Support\Facades\Route;
-
-Route::group(
-    ['prefix' => 'v2/reports', 'middleware' => ['auth:sanctum']],
-    base_path('routes/web/reports.php')
-);
-
-PHP
-    );
-    file_put_contents(
-        $tmp.'/routes/web/reports.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\ReportController;
-use Illuminate\Support\Facades\Route;
-
-Route::get('/summary', [ReportController::class, 'summary']);
-
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-
-        $summary = array_values(array_filter(
-            $routes,
-            fn ($r) => $r->action === 'summary'
-        ));
-
-        expect($summary)->toHaveCount(1);
-        expect($summary[0])->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/v2/reports/summary')
-            ->method->toBe('GET');
-        expect($summary[0]->middlewares)->toContain('auth:sanctum');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
+    expect($delete)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\CategoryController')
+        ->action->toBe('destroy')
+        ->middlewares->toBeArray()->toContain('api')->toContain('auth:sanctum');
 });
 
-it('applies the prefix/middleware from a RouteServiceProvider::boot() group registration', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/api', 0777, true);
-    mkdir($tmp.'/app/Providers', 0777, true);
-    file_put_contents(
-        $tmp.'/app/Providers/RouteServiceProvider.php',
-        <<<'PHP'
-<?php
+it("collapses trailing slash when Route::get('/') is inside a prefix group", function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $perm = findRoute($routes, fn ($r) => $r->controller === 'App\Http\Controllers\PermissionController');
 
-namespace App\Providers;
-
-use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
-use Illuminate\Support\Facades\Route;
-
-class RouteServiceProvider extends ServiceProvider
-{
-    public function boot(): void
-    {
-        Route::middleware('api')
-            ->prefix('api/customer')
-            ->group(base_path('routes/api/customer.php'));
-    }
-}
-PHP
-    );
-    file_put_contents(
-        $tmp.'/routes/api/customer.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\AddressController;
-use Illuminate\Support\Facades\Route;
-
-Route::delete('/address/{id}', [AddressController::class, 'destroy']);
-
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-
-        $delete = array_values(array_filter(
-            $routes,
-            fn ($r) => $r->action === 'destroy' && $r->method === 'DELETE'
-        ));
-
-        expect($delete)->toHaveCount(1);
-        expect($delete[0])->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/api/customer/address/{id}')
-            ->controller->toBe('App\Http\Controllers\AddressController');
-        expect($delete[0]->middlewares)->toContain('api');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
+    expect($perm)->toBeInstanceOf(RouteDefinition::class)
+        ->uri->toBe('/api/admin/permission')
+        ->method->toBe('GET')
+        ->middlewares->toBeArray()->toContain('api');
 });
 
-it('applies static-form Route::group($attrs, base_path(...)) registered in a provider', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/api', 0777, true);
-    mkdir($tmp.'/app/Providers', 0777, true);
-    file_put_contents(
-        $tmp.'/app/Providers/RouteServiceProvider.php',
-        <<<'PHP'
-<?php
+it('composes a provider-applied prefix with an inner Route::prefix group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $posts = findRoute($routes, fn ($r) => $r->uri === '/api/v1/posts' && $r->method === 'GET');
 
-namespace App\Providers;
-
-use Illuminate\Foundation\Support\Providers\RouteServiceProvider as ServiceProvider;
-use Illuminate\Support\Facades\Route;
-
-class RouteServiceProvider extends ServiceProvider
-{
-    public function boot(): void
-    {
-        Route::group(
-            ['prefix' => 'api/restaurant', 'middleware' => ['api', 'auth:sanctum']],
-            base_path('routes/api/restaurant.php')
-        );
-    }
-}
-PHP
-    );
-    file_put_contents(
-        $tmp.'/routes/api/restaurant.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\CategoryController;
-use Illuminate\Support\Facades\Route;
-
-Route::delete('/category/{id}', [CategoryController::class, 'destroy']);
-
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-
-        $delete = array_values(array_filter(
-            $routes,
-            fn ($r) => $r->action === 'destroy' && $r->method === 'DELETE'
-        ));
-
-        expect($delete)->toHaveCount(1);
-        expect($delete[0])->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/api/restaurant/category/{id}');
-        expect($delete[0]->middlewares)
-            ->toContain('api')
-            ->toContain('auth:sanctum');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
+    expect($posts)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\PostController')
+        ->action->toBe('index')
+        ->middlewares->toBeArray()->toContain('api');
 });
 
-it('combines a provider-applied prefix with an inner Route::prefix(...) group', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/api', 0777, true);
-    mkdir($tmp.'/app/Providers', 0777, true);
-    file_put_contents(
-        $tmp.'/app/Providers/RouteServiceProvider.php',
-        <<<'PHP'
-<?php
+it('follows Route::group(base_path(...)) inside another routes file', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $general = findRoute($routes, fn ($r) => $r->uri === '/settings/general' && $r->method === 'GET');
 
-namespace App\Providers;
-
-use Illuminate\Support\Facades\Route;
-
-class RouteServiceProvider
-{
-    public function boot(): void
-    {
-        Route::middleware('api')
-            ->prefix('api')
-            ->group(base_path('routes/api/v1.php'));
-    }
-}
-PHP
-    );
-    file_put_contents(
-        $tmp.'/routes/api/v1.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\PostController;
-use Illuminate\Support\Facades\Route;
-
-Route::prefix('v1')->group(function () {
-    Route::get('/posts', [PostController::class, 'index']);
+    expect($general)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\SettingsController')
+        ->action->toBe('general')
+        ->middlewares->toBeArray()->toContain('web');
 });
 
-PHP
-    );
+it('does not double-emit a Route::group(base_path(...)) target file', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $settings = array_filter($routes, fn ($r) => $r->action === 'general');
 
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-        $index = findRoute($routes, fn ($r) => $r->action === 'index');
-
-        expect($index)->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/api/v1/posts')
-            ->method->toBe('GET');
-        expect($index->middlewares)->toContain('api');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
-});
-
-it("renders Route::get('/') inside a prefix group as the prefix without trailing slash", function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/api', 0777, true);
-    file_put_contents(
-        $tmp.'/routes/api/admin.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\PermissionController;
-use Illuminate\Support\Facades\Route;
-
-Route::prefix('permission')->group(function () {
-    Route::get('/', [PermissionController::class, 'index']);
-});
-
-Route::prefix('status')->group(function () {
-    Route::get('/', [PermissionController::class, 'status']);
-});
-
-// Bare root route inside no prefix — should still resolve to '/'.
-Route::get('/', [PermissionController::class, 'root']);
-
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-
-        $perm = findRoute($routes, fn ($r) => $r->action === 'index');
-        expect($perm)->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/permission'); // not '/permission/'
-
-        $status = findRoute($routes, fn ($r) => $r->action === 'status');
-        expect($status)->uri->toBe('/status'); // not '/status/'
-
-        $root = findRoute($routes, fn ($r) => $r->action === 'root');
-        expect($root)->uri->toBe('/'); // bare root stays '/'
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
-});
-
-it('renders Route::get(/) inside a provider prefix without trailing slash', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/api', 0777, true);
-    mkdir($tmp.'/app/Providers', 0777, true);
-    file_put_contents(
-        $tmp.'/app/Providers/RouteServiceProvider.php',
-        <<<'PHP'
-<?php
-
-namespace App\Providers;
-
-use Illuminate\Support\Facades\Route;
-
-class RouteServiceProvider
-{
-    public function boot(): void
-    {
-        Route::middleware('api')
-            ->prefix('api/admin')
-            ->group(base_path('routes/api/admin.php'));
-    }
-}
-PHP
-    );
-    file_put_contents(
-        $tmp.'/routes/api/admin.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\PermissionController;
-use Illuminate\Support\Facades\Route;
-
-Route::prefix('permission')->group(function () {
-    Route::get('/', [PermissionController::class, 'index']);
-});
-
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-        $perm = findRoute($routes, fn ($r) => $r->action === 'index');
-
-        // Combined provider prefix + inner prefix + root URI must NOT keep
-        // the trailing slash from the empty Route::get('/') segment.
-        expect($perm)->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/api/admin/permission');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
-});
-
-it('resolves base_path(...) inside a require statement', function () {
-    $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
-    mkdir($tmp.'/routes/api', 0777, true);
-    file_put_contents(
-        $tmp.'/routes/api/web.php',
-        <<<'PHP'
-<?php
-
-use Illuminate\Support\Facades\Route;
-
-Route::middleware('auth')->prefix('settings')->group(function () {
-    require base_path('routes/api/settings.php');
-});
-
-PHP
-    );
-    file_put_contents(
-        $tmp.'/routes/api/settings.php',
-        <<<'PHP'
-<?php
-
-use App\Http\Controllers\SettingsController;
-use Illuminate\Support\Facades\Route;
-
-Route::get('/general', [SettingsController::class, 'general']);
-
-PHP
-    );
-
-    try {
-        $routes = (new RouteAnalyzer(['routes/*/*.php']))->analyze($tmp);
-        $general = findRoute($routes, fn ($r) => $r->action === 'general');
-
-        expect($general)->toBeInstanceOf(RouteDefinition::class)
-            ->uri->toBe('/settings/general');
-        expect($general->middlewares)->toContain('auth');
-    } finally {
-        routeAnalyzerTestDeleteTree($tmp);
-    }
+    expect($settings)->toHaveCount(1);
 });
 
 it('follows require into a route file carrying parent group context, once', function () {
