@@ -293,6 +293,63 @@ PHP
     }
 });
 
+it('applies prefix and middleware from a RouteServiceProvider chain-form group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $delete = findRoute($routes, fn ($r) => $r->uri === '/api/customer/address/{id}' && $r->method === 'DELETE');
+
+    expect($delete)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\AddressController')
+        ->action->toBe('destroy')
+        ->middlewares->toBeArray()->toContain('api');
+});
+
+it('applies prefix and middleware from a RouteServiceProvider static-form group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $delete = findRoute($routes, fn ($r) => $r->uri === '/api/restaurant/category/{id}' && $r->method === 'DELETE');
+
+    expect($delete)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\CategoryController')
+        ->action->toBe('destroy')
+        ->middlewares->toBeArray()->toContain('api')->toContain('auth:sanctum');
+});
+
+it("collapses trailing slash when Route::get('/') is inside a prefix group", function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $perm = findRoute($routes, fn ($r) => $r->controller === 'App\Http\Controllers\PermissionController');
+
+    expect($perm)->toBeInstanceOf(RouteDefinition::class)
+        ->uri->toBe('/api/admin/permission')
+        ->method->toBe('GET')
+        ->middlewares->toBeArray()->toContain('api');
+});
+
+it('composes a provider-applied prefix with an inner Route::prefix group', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $posts = findRoute($routes, fn ($r) => $r->uri === '/api/v1/posts' && $r->method === 'GET');
+
+    expect($posts)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\PostController')
+        ->action->toBe('index')
+        ->middlewares->toBeArray()->toContain('api');
+});
+
+it('follows Route::group(base_path(...)) inside another routes file', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $general = findRoute($routes, fn ($r) => $r->uri === '/settings/general' && $r->method === 'GET');
+
+    expect($general)->toBeInstanceOf(RouteDefinition::class)
+        ->controller->toBe('App\Http\Controllers\SettingsController')
+        ->action->toBe('general')
+        ->middlewares->toBeArray()->toContain('web');
+});
+
+it('does not double-emit a Route::group(base_path(...)) target file', function () {
+    $routes = (new RouteAnalyzer)->analyze(fixture('grouped-routes-project'));
+    $settings = array_filter($routes, fn ($r) => $r->action === 'general');
+
+    expect($settings)->toHaveCount(1);
+});
+
 it('follows require into a route file carrying parent group context, once', function () {
     $tmp = sys_get_temp_dir().'/lb-route-analyzer-'.uniqid('', true);
     mkdir($tmp.'/routes/inc', 0777, true);
