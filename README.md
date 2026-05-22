@@ -24,6 +24,10 @@ LaraMint\LaravelBrain is a zero-config developer tool that analyzes your Laravel
 
 The scan writes JSON graph files to `storage/app/laravel-brain/`. The viewer is served at `/_laravel-brain` entirely through your existing Laravel routes — no separate server process needed.
 
+<p align="center">
+  <img src="art/example.png" alt="Laravel Brain"/>
+</p>
+
 ## Features
 
 - **Full lifecycle tracing** — Follows every route from HTTP verb → controller → service → repository → model → events/jobs
