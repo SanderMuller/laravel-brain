@@ -88,6 +88,27 @@ return [
     'auto_discover_exclude_vendor' => env('LARAVEL_BRAIN_AUTO_DISCOVER_EXCLUDE_VENDOR', true),
 
     // -------------------------------------------------------------------------
+    // Security Analysis
+    // -------------------------------------------------------------------------
+    // Extra middleware aliases or FQCN prefixes that Brain should treat as
+    // authentication middleware. Entries are matched as case-insensitive
+    // prefixes, so 'auth.custom' matches 'auth.custom:api'.
+    //
+    // Add your application's custom auth middleware here to prevent
+    // false "Public Route" warnings.
+    //
+    // Example:
+    //   'auth_middleware' => [
+    //       'App\\Http\\Middleware\\CustomAuth',
+    //   ],
+    //
+    'security' => [
+        'auth_middleware' => [
+            'App\\Http\\Middleware\\CustomAuth',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Route File Paths
     // -------------------------------------------------------------------------
     // Glob patterns (relative to project root) used to discover route files.
