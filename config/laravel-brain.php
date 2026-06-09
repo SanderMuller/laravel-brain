@@ -103,9 +103,7 @@ return [
     //   ],
     //
     'security' => [
-        'auth_middleware' => [
-            'App\\Http\\Middleware\\CustomAuth',
-        ],
+        'auth_middleware' => [],
     ],
 
     // -------------------------------------------------------------------------
