@@ -80,7 +80,10 @@ class ProjectAnalyzer
         $this->modelAnalyzer = new ModelAnalyzer(is_array($modelPaths) ? $modelPaths : []);
         $this->filamentAnalyzer = new FilamentAnalyzer;
         $this->queryTracer = new QueryTracer;
-        $this->securityAnalyzer = new SecurityAnalyzer;
+        $authMiddleware = config('laravel-brain.security.auth_middleware', []);
+        $this->securityAnalyzer = new SecurityAnalyzer(
+            extraAuthPatterns: is_array($authMiddleware) ? $authMiddleware : [],
+        );
         $this->graphBuilder = new GraphBuilder;
         $livewirePaths = config('laravel-brain.livewire.component_paths', []);
         if (is_array($livewirePaths) && $livewirePaths !== []) {

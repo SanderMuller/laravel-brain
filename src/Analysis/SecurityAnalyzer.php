@@ -100,7 +100,7 @@ class SecurityAnalyzer
     /** @var array<string, list<array<string, mixed>>>|null */
     private ?array $externalByFile = null;
 
-    public function __construct()
+    public function __construct(private array $extraAuthPatterns = [])
     {
         $this->parser = new PhpFileParser;
     }
@@ -229,8 +229,9 @@ class SecurityAnalyzer
             }
         }
         // Auth check
+        $authPatterns = array_merge(self::AUTH_PATTERNS, $this->extraAuthPatterns);
         foreach ($middlewares as $mw) {
-            if ($this->middlewareMatches($mw, self::AUTH_PATTERNS)) {
+            if ($this->middlewareMatches($mw, $authPatterns)) {
                 return 'authed';
             }
         }
