@@ -35,6 +35,10 @@ class SecurityAnalyzer
      * Middleware aliases / FQCN prefixes that imply authentication is required.
      * Matched as prefix (case-insensitive) so `auth:sanctum` and
      * `Illuminate\Auth\Middleware\Authenticate` both match.
+     *
+     * `signed` and `ValidateSignature` are included because Laravel's signed
+     * URL middleware verifies a cryptographic HMAC of the URL — that's
+     * authentication of the request, even though it isn't tied to a user.
      */
     private const AUTH_PATTERNS = [
         'auth',
@@ -42,7 +46,9 @@ class SecurityAnalyzer
         'jwt',
         'passport',
         'verified',
+        'signed',
         'Illuminate\\Auth\\Middleware\\Authenticate',
+        'Illuminate\\Routing\\Middleware\\ValidateSignature',
     ];
 
     /** Middleware that redirects authenticated users away (login/register pages). */
@@ -100,9 +106,48 @@ class SecurityAnalyzer
     /** @var array<string, list<array<string, mixed>>>|null */
     private ?array $externalByFile = null;
 
-    public function __construct(private array $extraAuthPatterns = [])
-    {
+    /**
+     * Effective auth-middleware patterns (defaults + $extraAuthPatterns),
+     * pre-computed so classifyExposure() doesn't re-merge per route.
+     *
+     * @var list<string>
+     */
+    private array $authPatterns;
+
+    /**
+     * Effective throttle-middleware patterns (defaults + $extraThrottlePatterns).
+     *
+     * @var list<string>
+     */
+    private array $throttlePatterns;
+
+    /**
+     * @param  list<string>  $extraAuthPatterns  User-configured extra auth middleware
+     *                                           (from `laravel-brain.security.auth_middleware`).
+     * @param  list<string>  $extraThrottlePatterns  User-configured extra throttle middleware
+     *                                               (from `laravel-brain.security.throttle_middleware`).
+     * @param  list<string>  $trustedRouteNames  Route-name glob patterns whose routes
+     *                                           authenticate outside of Laravel's middleware system —
+     *                                           webhooks with HMAC verification, token-in-URL flows,
+     *                                           custom api-key middleware. PUBLIC_WRITE is
+     *                                           suppressed for matching routes.
+     * @param  list<string>  $trustedRouteUris  Route-URI glob patterns, same semantics as
+     *                                          $trustedRouteNames. Matched against the route URI
+     *                                          with the leading slash stripped.
+     */
+    public function __construct(
+        private array $extraAuthPatterns = [],
+        private array $extraThrottlePatterns = [],
+        private array $trustedRouteNames = [],
+        private array $trustedRouteUris = [],
+    ) {
         $this->parser = new PhpFileParser;
+        $this->authPatterns = array_values(array_unique(
+            array_merge(self::AUTH_PATTERNS, $this->extraAuthPatterns),
+        ));
+        $this->throttlePatterns = array_values(array_unique(
+            array_merge(self::THROTTLE_PATTERNS, $this->extraThrottlePatterns),
+        ));
     }
 
     // ── Public API ───────────────────────────────────────────────────────────
@@ -138,10 +183,17 @@ class SecurityAnalyzer
             $exposure = $this->classifyExposure($resolvedMw);
             $issues = [];
 
+            $isTrusted = $this->isTrustedRoute($route);
+            $hasThrottleMiddleware = $this->hasMiddlewareMatching($resolvedMw, $this->throttlePatterns);
+            $controllerDef = ($route->controller !== '' && $route->controller !== 'Closure')
+                ? ($controllers[$route->controller] ?? null)
+                : null;
+
             // ── 1. Missing throttle on sensitive endpoints ───────────────────
             if (in_array($route->method, ['POST', 'PUT', 'PATCH'], true)
                 && $this->isSensitiveUri($route->uri)
-                && ! $this->hasMiddlewareMatching($resolvedMw, self::THROTTLE_PATTERNS)
+                && ! $hasThrottleMiddleware
+                && ! $this->hasInCodeThrottle($route, $controllerDef)
             ) {
                 $issues[] = (new SecurityIssue(
                     type: 'MISSING_THROTTLE',
@@ -153,6 +205,7 @@ class SecurityAnalyzer
             // ── 2. Unauthenticated write operations ─────────────────────────
             if (in_array($route->method, ['POST', 'PUT', 'PATCH', 'DELETE'], true)
                 && $exposure === 'public'
+                && ! $isTrusted
             ) {
                 $severity = $route->method === 'DELETE' ? 'high' : 'medium';
                 $issues[] = (new SecurityIssue(
@@ -229,9 +282,8 @@ class SecurityAnalyzer
             }
         }
         // Auth check
-        $authPatterns = array_merge(self::AUTH_PATTERNS, $this->extraAuthPatterns);
         foreach ($middlewares as $mw) {
-            if ($this->middlewareMatches($mw, $authPatterns)) {
+            if ($this->middlewareMatches($mw, $this->authPatterns)) {
                 return 'authed';
             }
         }
@@ -255,6 +307,237 @@ class SecurityAnalyzer
         }
 
         return false;
+    }
+
+    /**
+     * A route is "trusted" when the user has declared (via config) that its
+     * authentication is enforced outside of Laravel's middleware system —
+     * typically a webhook with HMAC verification in the controller, or an
+     * endpoint authenticated by a token in the URL.
+     *
+     * When trusted, PUBLIC_WRITE is suppressed for the route.
+     */
+    private function isTrustedRoute(RouteDefinition $route): bool
+    {
+        if ($route->name !== '') {
+            foreach ($this->trustedRouteNames as $pattern) {
+                if ($this->globMatches($pattern, $route->name)) {
+                    return true;
+                }
+            }
+        }
+        $uri = ltrim($route->uri, '/');
+        foreach ($this->trustedRouteUris as $pattern) {
+            if ($this->globMatches(ltrim($pattern, '/'), $uri)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function globMatches(string $pattern, string $subject): bool
+    {
+        // Match 'webhooks.*' against 'webhooks.stripe' and 'webhooks/*' against
+        // 'webhooks/stripe/123'. fnmatch supports both * and ? without the
+        // regex caveats.
+        return fnmatch($pattern, $subject, FNM_CASEFOLD);
+    }
+
+    /**
+     * Detect rate-limiting performed in PHP instead of via middleware:
+     *   • RateLimiter::tooManyAttempts / ::hit / ::for / ::attempt / ::availableIn
+     *     in the controller method or any FormRequest used by it.
+     *   • Use of the Illuminate\Foundation\Auth\ThrottlesLogins trait on the
+     *     controller class (Laravel's classic Breeze/Fortify pattern).
+     */
+    private function hasInCodeThrottle(RouteDefinition $route, ?ControllerDefinition $controllerDef): bool
+    {
+        // Closure routes: scan the closure body for the same patterns.
+        if ($controllerDef === null) {
+            if ($route->closureNode === null) {
+                return false;
+            }
+
+            return $this->astHasRateLimiterCall($route->closureNode);
+        }
+
+        if (! is_file($controllerDef->file)) {
+            return false;
+        }
+
+        $parsed = $this->cachedParse($controllerDef->file);
+        if ($parsed['ast'] === null) {
+            return false;
+        }
+
+        if ($this->astUsesThrottlesLoginsTrait($parsed['ast'], $parsed['useMap'] ?? [])) {
+            return true;
+        }
+
+        $methodNode = $this->findClassMethod($parsed['ast'], $route->action);
+        if ($methodNode === null) {
+            return false;
+        }
+
+        if ($this->astHasRateLimiterCall($methodNode)) {
+            return true;
+        }
+
+        // Walk into any FormRequest type-hinted parameters and scan them too.
+        $useMap = array_merge($controllerDef->useMap, $parsed['useMap'] ?? []);
+        foreach ($this->resolveFormRequestFiles($methodNode, $useMap) as $requestFile) {
+            $requestParsed = $this->cachedParse($requestFile);
+            if ($requestParsed['ast'] !== null && $this->astHasRateLimiterCall($requestParsed['ast'])) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private function astHasRateLimiterCall($node): bool
+    {
+        $found = false;
+        $traverser = new NodeTraverser;
+        $traverser->addVisitor(new class($found) extends NodeVisitorAbstract
+        {
+            public function __construct(public bool &$found) {}
+
+            public function enterNode(Node $node): ?int
+            {
+                if ($this->found) {
+                    return NodeTraverser::STOP_TRAVERSAL;
+                }
+
+                // RateLimiter::tooManyAttempts(...) / ::hit(...) / ::for(...) / ::attempt(...) / ::availableIn(...)
+                if ($node instanceof Node\Expr\StaticCall
+                    && $node->name instanceof Node\Identifier
+                    && in_array($node->name->toString(), [
+                        'tooManyAttempts', 'hit', 'for', 'attempt', 'availableIn', 'clear',
+                    ], true)
+                    && $node->class instanceof Node\Name
+                    && str_contains(strtolower($node->class->toString()), 'ratelimiter')
+                ) {
+                    $this->found = true;
+
+                    return NodeTraverser::STOP_TRAVERSAL;
+                }
+
+                // $this->limiter()->tooManyAttempts(...), $r->hitRateLimit(...), etc.
+                if ($node instanceof Node\Expr\MethodCall
+                    && $node->name instanceof Node\Identifier
+                    && in_array($node->name->toString(), ['tooManyAttempts', 'hitRateLimit'], true)
+                ) {
+                    $this->found = true;
+
+                    return NodeTraverser::STOP_TRAVERSAL;
+                }
+
+                return null;
+            }
+        });
+        $traverser->traverse(is_array($node) ? $node : [$node]);
+
+        return $found;
+    }
+
+    /**
+     * Detect ThrottlesLogins (Laravel <=8 / Fortify) used on a controller class.
+     *
+     * @param  Node\Stmt[]  $ast
+     * @param  array<string, string>  $useMap
+     */
+    private function astUsesThrottlesLoginsTrait(array $ast, array $useMap): bool
+    {
+        $found = false;
+        $traverser = new NodeTraverser;
+        $traverser->addVisitor(new class($found, $useMap) extends NodeVisitorAbstract
+        {
+            public function __construct(public bool &$found, private array $useMap) {}
+
+            public function enterNode(Node $node): ?int
+            {
+                if ($node instanceof Node\Stmt\TraitUse) {
+                    foreach ($node->traits as $trait) {
+                        $name = $trait->toString();
+                        $fqcn = $this->useMap[$name] ?? $name;
+                        if (str_contains($fqcn, 'ThrottlesLogins')) {
+                            $this->found = true;
+
+                            return NodeTraverser::STOP_TRAVERSAL;
+                        }
+                    }
+                }
+
+                return null;
+            }
+        });
+        $traverser->traverse($ast);
+
+        return $found;
+    }
+
+    /**
+     * Resolve every FormRequest typed parameter of a controller method to the
+     * absolute file path of its class declaration. Used so the throttle scan
+     * can follow `ensureIsNotRateLimited()` in a LoginRequest etc.
+     *
+     * @param  array<string, string>  $useMap
+     * @return list<string>
+     */
+    private function resolveFormRequestFiles(Node\Stmt\ClassMethod $method, array $useMap): array
+    {
+        $files = [];
+        foreach ($method->params as $param) {
+            if ($param->type === null) {
+                continue;
+            }
+            $typeName = $this->extractTypeName($param->type);
+            if ($typeName === null) {
+                continue;
+            }
+            $fqcn = $useMap[$typeName] ?? $typeName;
+            if (! str_ends_with($fqcn, 'Request') && ! str_contains($fqcn, 'FormRequest')) {
+                continue;
+            }
+            $file = $this->locateClassFile($fqcn);
+            if ($file !== null) {
+                $files[] = $file;
+            }
+        }
+
+        return $files;
+    }
+
+    /**
+     * Best-effort file lookup for a FQCN inside the project. Walks the
+     * conventional PSR-4 `App\...` mapping plus a Composer-classmap fallback.
+     */
+    private function locateClassFile(string $fqcn): ?string
+    {
+        if ($this->projectRoot === '') {
+            return null;
+        }
+
+        if (class_exists($fqcn, false) || class_exists($fqcn)) {
+            try {
+                $file = (new \ReflectionClass($fqcn))->getFileName();
+                if (is_string($file) && is_file($file)) {
+                    return $file;
+                }
+            } catch (\Throwable) {
+                // fall through
+            }
+        }
+
+        // PSR-4 convention: App\Http\Requests\LoginRequest → app/Http/Requests/LoginRequest.php
+        $candidate = rtrim($this->projectRoot, '/').'/'.str_replace(['App\\', '\\'], ['app/', '/'], ltrim($fqcn, '\\')).'.php';
+        if (is_file($candidate)) {
+            return $candidate;
+        }
+
+        return null;
     }
 
     private function hasMiddlewareMatching(array $middlewares, array $patterns): bool
@@ -481,6 +764,136 @@ class SecurityAnalyzer
     }
 
     /**
+     * Returns true when `$node` is a method call of the form `$req->all()` or
+     * `$req->input()` whose receiver is known to be an HTTP Request — either
+     * a parameter typed as `Illuminate\Http\Request` (or any subclass /
+     * FormRequest) in the enclosing function/method, or the `request()`
+     * global helper.
+     *
+     * Static so the anonymous visitors inside scanAstNode() can call it
+     * without needing a reference to the SecurityAnalyzer instance.
+     *
+     * @param  array<string, true>  $requestVars  variable names known to hold a Request
+     */
+    public static function isRequestAllCall(Node $node, array $requestVars): bool
+    {
+        if (! ($node instanceof Node\Expr\MethodCall)
+            || ! ($node->name instanceof Node\Identifier)
+        ) {
+            return false;
+        }
+        $method = $node->name->toString();
+        if (! in_array($method, ['all', 'input'], true)) {
+            return false;
+        }
+        if ($method === 'input' && count($node->args) !== 0) {
+            return false;
+        }
+
+        $var = $node->var;
+        if ($var instanceof Node\Expr\Variable
+            && is_string($var->name)
+            && isset($requestVars[$var->name])
+        ) {
+            return true;
+        }
+        if ($var instanceof Node\Expr\FuncCall
+            && $var->name instanceof Node\Name
+            && $var->name->toString() === 'request'
+            && count($var->args) === 0
+        ) {
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Find every parameter in the enclosing function/method whose type-hint
+     * looks like an HTTP Request (FQCN resolves to Illuminate\Http\Request
+     * or matches the Request/FormRequest convention) and return their names.
+     *
+     * @param  array<string, string>  $useMap
+     * @return array<string, true>
+     */
+    private function collectRequestParamNames(Node $node, array $useMap): array
+    {
+        $names = [];
+        $traverser = new NodeTraverser;
+        $traverser->addVisitor(new class($names, $useMap) extends NodeVisitorAbstract
+        {
+            public function __construct(public array &$names, private array $useMap) {}
+
+            public function enterNode(Node $node): ?int
+            {
+                if (! ($node instanceof Node\FunctionLike)) {
+                    return null;
+                }
+                foreach ($node->getParams() as $param) {
+                    if ($param->type === null || ! ($param->var instanceof Node\Expr\Variable)) {
+                        continue;
+                    }
+                    $varName = is_string($param->var->name) ? $param->var->name : null;
+                    if ($varName === null) {
+                        continue;
+                    }
+                    foreach ($this->extractTypeNames($param->type) as $typeName) {
+                        $fqcn = $this->useMap[$typeName] ?? $typeName;
+                        if ($this->looksLikeRequestType($fqcn)) {
+                            $this->names[$varName] = true;
+                            break;
+                        }
+                    }
+                }
+
+                return null;
+            }
+
+            /** @return list<string> */
+            private function extractTypeNames(Node $type): array
+            {
+                if ($type instanceof Node\Name || $type instanceof Node\Identifier) {
+                    return [$type->toString()];
+                }
+                if ($type instanceof Node\NullableType) {
+                    return $this->extractTypeNames($type->type);
+                }
+                if ($type instanceof Node\UnionType || $type instanceof Node\IntersectionType) {
+                    $names = [];
+                    foreach ($type->types as $sub) {
+                        foreach ($this->extractTypeNames($sub) as $n) {
+                            $names[] = $n;
+                        }
+                    }
+
+                    return $names;
+                }
+
+                return [];
+            }
+
+            private function looksLikeRequestType(string $fqcn): bool
+            {
+                $fqcn = ltrim($fqcn, '\\');
+                if (str_contains($fqcn, 'Illuminate\\Http\\Request')) {
+                    return true;
+                }
+                if (str_contains($fqcn, 'FormRequest')) {
+                    return true;
+                }
+                if (str_contains($fqcn, '\\Http\\Requests\\') || str_ends_with($fqcn, 'Request')) {
+                    return true;
+                }
+
+                return false;
+            }
+        });
+        $traverser->traverse([$node]);
+
+        return $names;
+    }
+
+    /**
      * Walk any AST node and collect security issues.
      *
      * Two-pass approach:
@@ -498,16 +911,18 @@ class SecurityAnalyzer
     ): array {
         $issues = [];
         $hasValidation = $hasFormRequest;
+        $requestVars = $this->collectRequestParamNames($node, $useMap);
 
         // ── Pass 1: mass-assignment + validation detection ───────────────────
         $traverser = new NodeTraverser;
-        $traverser->addVisitor(new class($issues, $hasValidation, $useMap, $file) extends NodeVisitorAbstract
+        $traverser->addVisitor(new class($issues, $hasValidation, $useMap, $file, $requestVars) extends NodeVisitorAbstract
         {
             public function __construct(
                 public array &$issues,
                 public bool &$hasValidation,
                 private array $useMap,
                 private ?string $file,
+                private array $requestVars,
             ) {}
 
             public function enterNode(Node $node): ?int
@@ -541,7 +956,7 @@ class SecurityAnalyzer
                     ], true)
                 ) {
                     foreach ($node->args as $arg) {
-                        if ($this->isRequestAll($arg->value)) {
+                        if (SecurityAnalyzer::isRequestAllCall($arg->value, $this->requestVars)) {
                             $this->issues[] = (new SecurityIssue(
                                 type: 'MASS_ASSIGNMENT',
                                 severity: 'critical',
@@ -559,7 +974,7 @@ class SecurityAnalyzer
                     && in_array($node->name->toString(), ['fill', 'forceFill'], true)
                 ) {
                     foreach ($node->args as $arg) {
-                        if ($this->isRequestAll($arg->value)) {
+                        if (SecurityAnalyzer::isRequestAllCall($arg->value, $this->requestVars)) {
                             $this->issues[] = (new SecurityIssue(
                                 type: 'MASS_ASSIGNMENT',
                                 severity: 'critical',
@@ -573,14 +988,6 @@ class SecurityAnalyzer
 
                 return null;
             }
-
-            private function isRequestAll(Node $node): bool
-            {
-                return $node instanceof Node\Expr\MethodCall
-                    && $node->name instanceof Node\Identifier
-                    && in_array($node->name->toString(), ['all', 'input'], true)
-                    && ($node->name->toString() !== 'input' || count($node->args) === 0);
-            }
         });
         $traverser->traverse([$node]);
 
@@ -588,19 +995,17 @@ class SecurityAnalyzer
         if (! $hasValidation) {
             $unvalidatedTraverser = new NodeTraverser;
             $unvalidatedTraverser->addVisitor(
-                new class($issues, $file) extends NodeVisitorAbstract
+                new class($issues, $file, $requestVars) extends NodeVisitorAbstract
                 {
                     public function __construct(
                         public array &$issues,
                         private ?string $file,
+                        private array $requestVars,
                     ) {}
 
                     public function enterNode(Node $node): ?int
                     {
-                        if ($node instanceof Node\Expr\MethodCall
-                            && $node->name instanceof Node\Identifier
-                            && $node->name->toString() === 'all'
-                        ) {
+                        if (SecurityAnalyzer::isRequestAllCall($node, $this->requestVars)) {
                             $this->issues[] = (new SecurityIssue(
                                 type: 'UNVALIDATED_INPUT',
                                 severity: 'high',

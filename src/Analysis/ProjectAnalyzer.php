@@ -80,9 +80,11 @@ class ProjectAnalyzer
         $this->modelAnalyzer = new ModelAnalyzer(is_array($modelPaths) ? $modelPaths : []);
         $this->filamentAnalyzer = new FilamentAnalyzer;
         $this->queryTracer = new QueryTracer;
-        $authMiddleware = config('laravel-brain.security.auth_middleware', []);
         $this->securityAnalyzer = new SecurityAnalyzer(
-            extraAuthPatterns: is_array($authMiddleware) ? $authMiddleware : [],
+            extraAuthPatterns: $this->stringList(config('laravel-brain.security.auth_middleware', [])),
+            extraThrottlePatterns: $this->stringList(config('laravel-brain.security.throttle_middleware', [])),
+            trustedRouteNames: $this->stringList(config('laravel-brain.security.trusted_route_names', [])),
+            trustedRouteUris: $this->stringList(config('laravel-brain.security.trusted_route_uris', [])),
         );
         $this->graphBuilder = new GraphBuilder;
         $livewirePaths = config('laravel-brain.livewire.component_paths', []);
@@ -312,5 +314,29 @@ class ProjectAnalyzer
     private function emit(string $event, array $data = []): void
     {
         ($this->onProgress)($event, $data);
+    }
+
+    /**
+     * Coerce the result of a config() lookup into a list of non-empty
+     * strings. Anything else (a non-array value, a key with mixed contents,
+     * an empty string) is dropped silently so a typo in the user's config
+     * can't crash the scan.
+     *
+     * @param  mixed  $value
+     * @return list<string>
+     */
+    private function stringList($value): array
+    {
+        if (! is_array($value)) {
+            return [];
+        }
+        $out = [];
+        foreach ($value as $item) {
+            if (is_string($item) && $item !== '') {
+                $out[] = $item;
+            }
+        }
+
+        return $out;
     }
 }

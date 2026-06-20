@@ -90,20 +90,63 @@ return [
     // -------------------------------------------------------------------------
     // Security Analysis
     // -------------------------------------------------------------------------
-    // Extra middleware aliases or FQCN prefixes that Brain should treat as
-    // authentication middleware. Entries are matched as case-insensitive
-    // prefixes, so 'auth.custom' matches 'auth.custom:api'.
+    // Override / extend the SecurityAnalyzer heuristics that classify each
+    // route's exposure and decide what counts as throttled or trusted.
     //
-    // Add your application's custom auth middleware here to prevent
-    // false "Public Route" warnings.
+    // The analyzer always starts from a conservative built-in default list
+    // and *adds* anything declared here on top — it never replaces the
+    // defaults. Entries are matched as case-insensitive prefixes; a plain
+    // name like 'auth.custom' matches 'auth.custom' and 'auth.custom:api'.
     //
-    // Example:
-    //   'auth_middleware' => [
-    //       'App\\Http\\Middleware\\CustomAuth',
-    //   ],
+    // When in doubt, leave everything empty. The defaults catch the
+    // standard Laravel middleware (`auth`, `auth:sanctum`, `signed`,
+    // `throttle`, etc.).
     //
     'security' => [
+
+        // Extra middleware aliases or FQCN prefixes that Brain should treat
+        // as authentication. Add your application's custom HMAC / api-key
+        // / bearer-token middleware here so routes guarded by it stop
+        // being reported as "public" / PUBLIC_WRITE.
+        //
+        // Examples:
+        //   'auth.custom',
+        //   'merchant.hmac',
+        //   App\Http\Middleware\AuthenticateMerchant::class,
+        //
         'auth_middleware' => [],
+
+        // Extra middleware aliases or FQCN prefixes that Brain should treat
+        // as rate-limiting. The default list already covers `throttle:` and
+        // ThrottleRequests; add any custom throttle middleware here.
+        //
+        'throttle_middleware' => [],
+
+        // Route names whose routes are trusted (PUBLIC_WRITE will be
+        // suppressed even when no recognised auth middleware is present).
+        //
+        // Use this for endpoints whose authentication is enforced *outside*
+        // of Laravel's middleware system — typically a webhook with HMAC
+        // verification done in the controller, or an endpoint authenticated
+        // by a token in the URL.
+        //
+        // Supports glob patterns (`*` and `?`), matched case-insensitively.
+        //
+        // Examples:
+        //   'webhooks.*',
+        //   'portal.*',
+        //
+        'trusted_route_names' => [],
+
+        // Route URI globs whose routes are trusted, same semantics as
+        // `trusted_route_names`. Matched against the route's URI without
+        // a leading slash. Useful when routes are unnamed.
+        //
+        // Examples:
+        //   'webhooks/*',
+        //   'portal/*/cancel',
+        //
+        'trusted_route_uris' => [],
     ],
 
     // -------------------------------------------------------------------------
