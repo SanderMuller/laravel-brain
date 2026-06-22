@@ -314,7 +314,7 @@ class MethodTracer
 
             private const EVENT_FUNCTIONS = ['event'];
 
-            private const DISPATCH_FUNCTIONS = ['dispatch'];
+            private const DISPATCH_FUNCTIONS = ['dispatch', 'dispatch_sync'];
 
             public function __construct(
                 array $varTypeMap,
@@ -449,6 +449,22 @@ class MethodTracer
                     && $node->var->name === 'this'
                 ) {
                     $this->handleAuthorize($node);
+
+                    return;
+                }
+
+                // $this->dispatch(new Job) / $this->dispatchSync(new Job) — DispatchesJobs trait.
+                if (in_array($method, ['dispatch', 'dispatchSync'], true)
+                    && $node->var instanceof Node\Expr\Variable
+                    && $node->var->name === 'this'
+                ) {
+                    $jobClass = $this->extractNewClass($node->args[0] ?? null);
+                    if ($jobClass !== null) {
+                        $jobFqcn = $this->useMap[$jobClass] ?? $jobClass;
+                        if ($this->looksLikeJob($jobFqcn)) {
+                            $this->hops[] = ['fqcn' => $jobFqcn, 'method' => 'handle', 'type' => 'job', 'visibility' => 'public'];
+                        }
+                    }
 
                     return;
                 }
