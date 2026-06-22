@@ -43,6 +43,8 @@ class ProjectAnalyzer
 
     private ChannelAnalyzer $channelAnalyzer;
 
+    private ListenerAnalyzer $listenerAnalyzer;
+
     private FilamentAnalyzer $filamentAnalyzer;
 
     private QueryTracer $queryTracer;
@@ -65,6 +67,9 @@ class ProjectAnalyzer
 
         $channelPaths = config('laravel-brain.channel_paths', ['routes/*/*.php']);
         $this->channelAnalyzer = new ChannelAnalyzer($channelPaths);
+
+        $listenerPaths = config('laravel-brain.listeners.paths', ['app/Listeners']);
+        $this->listenerAnalyzer = new ListenerAnalyzer(is_array($listenerPaths) ? $listenerPaths : []);
 
         $cmdConfig = config('laravel-brain.commands', []);
         $this->consoleAnalyzer = new ConsoleAnalyzer(
@@ -141,6 +146,11 @@ class ProjectAnalyzer
             foreach ($closureEdges as $edge) {
                 $callChain[] = $edge;
             }
+        }
+
+        // Link dispatched events to the listeners that handle them (discovered by convention).
+        foreach ($this->listenerAnalyzer->analyze($projectRoot) as $edge) {
+            $callChain[] = $edge;
         }
 
         $this->emit('step:done', ['step' => 'lifecycle', 'count' => count($callChain), 'unit' => 'call edge', 'message' => '    Discovered '.count($callChain).' call chain edge(s)']);
