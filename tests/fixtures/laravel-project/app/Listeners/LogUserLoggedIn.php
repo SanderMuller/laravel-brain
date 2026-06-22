@@ -6,7 +6,5 @@ use App\Events\UserLoggedIn;
 
 class LogUserLoggedIn
 {
-    public function __invoke(UserLoggedIn $event): void
-    {
-    }
+    public function __invoke(UserLoggedIn $event): void {}
 }
