@@ -24,6 +24,8 @@ class AnalysisResult
         public int $totalCommands = 0,
         public int $totalChannels = 0,
         public int $totalFilamentResources = 0,
+        /** @var string[] "FQCN::method" of methods that dispatch a job Brain couldn't resolve statically */
+        public array $unresolvedDispatchers = [],
     ) {}
 }
 
@@ -80,7 +82,8 @@ class ProjectAnalyzer
 
         $this->middlewareAnalyzer = new MiddlewareAnalyzer;
         $this->controllerAnalyzer = new ControllerAnalyzer;
-        $this->methodTracer = new MethodTracer;
+        $dispatchHelpers = config('laravel-brain.dispatch.helpers', []);
+        $this->methodTracer = new MethodTracer(is_array($dispatchHelpers) ? $dispatchHelpers : []);
         $modelPaths = config('laravel-brain.models.paths', ['app/Models']);
         $this->modelAnalyzer = new ModelAnalyzer(is_array($modelPaths) ? $modelPaths : []);
         $this->filamentAnalyzer = new FilamentAnalyzer;
@@ -304,6 +307,7 @@ class ProjectAnalyzer
             totalCommands: count($commands),
             totalChannels: count($channels),
             totalFilamentResources: $filamentResourceCount,
+            unresolvedDispatchers: $this->methodTracer->unresolvedDispatchers(),
         );
 
         $this->emit('analysis:done', [
