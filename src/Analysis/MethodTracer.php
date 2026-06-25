@@ -395,6 +395,26 @@ class MethodTracer
                     return;
                 }
 
+                // Bus facade: Bus::dispatch(new Job) / Bus::dispatchSync(new Job)
+                // and the array forms Bus::chain([new A, new B]) / Bus::batch([new A, new B]).
+                if (in_array($class, ['Bus', 'Illuminate\\Support\\Facades\\Bus'], true)
+                    && in_array($method, ['dispatch', 'dispatchSync', 'chain', 'batch'], true)) {
+                    $jobClasses = in_array($method, ['chain', 'batch'], true)
+                        ? $this->extractNewClassesFromArray($node->args[0] ?? null)
+                        : array_filter([$this->extractNewClass($node->args[0] ?? null)]);
+
+                    foreach ($jobClasses as $jobClass) {
+                        $this->hops[] = [
+                            'fqcn' => $this->useMap[$jobClass] ?? $jobClass,
+                            'method' => 'handle',
+                            'type' => 'job',
+                            'visibility' => 'public',
+                        ];
+                    }
+
+                    return;
+                }
+
                 // View::make('name')
                 if (in_array($class, ['View', 'Illuminate\\Support\\Facades\\View'], true) && $method === 'make') {
                     $vn = $this->extractViewName($node->args[0] ?? null);
@@ -757,6 +777,29 @@ class MethodTracer
                 }
 
                 return null;
+            }
+
+            /**
+             * The `new X()` items in an array-literal argument, e.g. Bus::chain([new A, new B]).
+             *
+             * @return string[]
+             */
+            private function extractNewClassesFromArray(?Node $node): array
+            {
+                $value = $node instanceof Node\Arg ? $node->value : $node;
+                if (! $value instanceof Node\Expr\Array_) {
+                    return [];
+                }
+
+                $classes = [];
+                foreach ($value->items as $item) {
+                    $class = $item !== null ? $this->extractNewClass($item->value) : null;
+                    if ($class !== null) {
+                        $classes[] = $class;
+                    }
+                }
+
+                return $classes;
             }
 
             private function looksLikeModel(string $class): bool

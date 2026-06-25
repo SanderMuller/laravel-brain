@@ -312,6 +312,9 @@ class FlowExtractor
             if (in_array($class, ['Event', 'Illuminate\\Support\\Facades\\Event']) && $method === 'dispatch') {
                 return ['type' => 'event', 'label' => 'Event::dispatch(...)'];
             }
+            if (in_array($class, ['Bus', 'Illuminate\\Support\\Facades\\Bus']) && in_array($method, ['dispatch', 'dispatchSync', 'chain', 'batch'])) {
+                return ['type' => 'dispatch', 'label' => "Bus::{$method}(...)"];
+            }
 
             return ['type' => 'call', 'label' => "{$short}::{$method}(...)"];
         }
