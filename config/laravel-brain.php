@@ -182,13 +182,20 @@ return [
     // -------------------------------------------------------------------------
     // Event Listeners
     // -------------------------------------------------------------------------
-    // Directories (relative to project root) scanned for listener classes.
-    // A class whose handle() type-hints an event in its first parameter is
-    // linked to that event, so the graph shows what runs when it dispatches.
+    // Event → listener edges are discovered from every registration form:
+    //   - convention: a class under "paths" whose handle()/__invoke() type-hints
+    //     the event in its first parameter;
+    //   - attribute: a class or method marked #[AsEventListener] under "paths";
+    //   - $listen / $subscribe: the maps declared in the providers under
+    //     "provider_paths" (subscriber subscribe() methods are followed too).
+    // So the graph shows what runs when an event dispatches, however it is wired.
     //
     'listeners' => [
         'paths' => [
             'app/Listeners',
+        ],
+        'provider_paths' => [
+            'app/Providers',
         ],
     ],
 
