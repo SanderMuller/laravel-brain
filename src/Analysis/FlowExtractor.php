@@ -321,16 +321,22 @@ class FlowExtractor
 
         // $this->service->method(...)  /  $var->method(...)
         if ($expr instanceof Node\Expr\MethodCall) {
+            $m = $expr->name instanceof Node\Identifier ? $expr->name->toString() : null;
+            if (in_array($m, ['dispatch', 'dispatchSync'], true)
+                && $expr->var instanceof Node\Expr\Variable && $expr->var->name === 'this') {
+                return ['type' => 'dispatch', 'label' => $this->shortExpr($expr)];
+            }
+
             return ['type' => 'call', 'label' => $this->shortExpr($expr)];
         }
 
-        // event(new SomeEvent)  /  dispatch(new SomeJob)
+        // event(new SomeEvent)  /  dispatch(new SomeJob)  /  dispatch_sync(new SomeJob)
         if ($expr instanceof Node\Expr\FuncCall && $expr->name instanceof Node\Name) {
             $fn = $expr->name->toString();
             if ($fn === 'event') {
                 return ['type' => 'event', 'label' => $this->shortExpr($expr)];
             }
-            if ($fn === 'dispatch') {
+            if (in_array($fn, ['dispatch', 'dispatch_sync'], true)) {
                 return ['type' => 'dispatch', 'label' => $this->shortExpr($expr)];
             }
 
