@@ -180,6 +180,19 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Event Listeners
+    // -------------------------------------------------------------------------
+    // Directories (relative to project root) scanned for listener classes.
+    // A class whose handle() type-hints an event in its first parameter is
+    // linked to that event, so the graph shows what runs when it dispatches.
+    //
+    'listeners' => [
+        'paths' => [
+            'app/Listeners',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Command Entry Points
     // -------------------------------------------------------------------------
     // Laravel commands are registered through three distinct entry points.

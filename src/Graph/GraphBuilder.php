@@ -716,6 +716,20 @@ class GraphBuilder
                 ]));
                 break;
 
+            case 'listener':
+                $short = class_basename($fqcn);
+                $file = $this->resolveFile($fqcn);
+                $flowSteps = $method ? $this->extractMethodFlowSteps($fqcn, $method) : [];
+                $this->graph->addNode(new Node($id, 'listener', $method ? "{$short}@{$method}" : $short, [
+                    'fqcn' => $fqcn,
+                    'method' => $method,
+                    'file' => $file,
+                    'flowSteps' => $flowSteps,
+                    'visibility' => 'public',
+                    ...($this->hasN1InSteps($flowSteps) ? ['hasN1' => true] : []),
+                ]));
+                break;
+
             case 'repository':
                 $short = class_basename($fqcn);
                 $file = $this->resolveFile($fqcn);
@@ -865,6 +879,9 @@ class GraphBuilder
         if ($this->looksLikeNotificationFqcn($fqcn)) {
             return 'notification';
         }
+        if (str_contains($fqcn, '\\Listeners\\')) {
+            return 'listener';
+        }
         if (str_contains($fqcn, 'Repository') || str_contains($fqcn, '\\Repositories\\')) {
             return 'repository';
         }
@@ -908,6 +925,7 @@ class GraphBuilder
             'model' => 'queries',
             'job' => 'dispatches',
             'event' => 'dispatches',
+            'listener' => 'handled by',
             'repository' => 'calls',
             'validation_request' => 'validates',
             'view' => 'renders',
