@@ -180,6 +180,18 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Job Dispatch
+    // -------------------------------------------------------------------------
+    // Brain resolves the built-in dispatch verbs (dispatch(), dispatch_sync(),
+    // Job::dispatch(), Bus::dispatch/chain/batch, $this->dispatch). List any
+    // custom global helper that wraps a queued job here so its dispatches are
+    // followed too, e.g. a project's own dispatch_with_retries().
+    //
+    'dispatch' => [
+        'helpers' => [],
+    ],
+
+    // -------------------------------------------------------------------------
     // Event Listeners
     // -------------------------------------------------------------------------
     // Directories (relative to project root) scanned for listener classes.
