@@ -71,7 +71,11 @@ class ProjectAnalyzer
         $this->channelAnalyzer = new ChannelAnalyzer($channelPaths);
 
         $listenerPaths = config('laravel-brain.listeners.paths', ['app/Listeners']);
-        $this->listenerAnalyzer = new ListenerAnalyzer(is_array($listenerPaths) ? $listenerPaths : []);
+        $providerPaths = config('laravel-brain.listeners.provider_paths', ['app/Providers']);
+        $this->listenerAnalyzer = new ListenerAnalyzer(
+            is_array($listenerPaths) ? $listenerPaths : [],
+            is_array($providerPaths) ? $providerPaths : [],
+        );
 
         $cmdConfig = config('laravel-brain.commands', []);
         $this->consoleAnalyzer = new ConsoleAnalyzer(
@@ -153,8 +157,8 @@ class ProjectAnalyzer
             }
         }
 
-        // Link dispatched events to the listeners that handle them (discovered by convention).
-        foreach ($this->listenerAnalyzer->analyze($projectRoot) as $edge) {
+        // Link dispatched events to the listeners that handle them.
+        foreach ($this->listenerAnalyzer->analyze($projectRoot, $psr4Map) as $edge) {
             $callChain[] = $edge;
         }
 
