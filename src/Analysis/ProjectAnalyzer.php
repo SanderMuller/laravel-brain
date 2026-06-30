@@ -47,6 +47,8 @@ class ProjectAnalyzer
 
     private ListenerAnalyzer $listenerAnalyzer;
 
+    private ObserverAnalyzer $observerAnalyzer;
+
     private FilamentAnalyzer $filamentAnalyzer;
 
     private QueryTracer $queryTracer;
@@ -75,6 +77,13 @@ class ProjectAnalyzer
         $this->listenerAnalyzer = new ListenerAnalyzer(
             is_array($listenerPaths) ? $listenerPaths : [],
             is_array($providerPaths) ? $providerPaths : [],
+        );
+
+        $observerModelPaths = config('laravel-brain.observers.model_paths', ['app/Models']);
+        $observerProviderPaths = config('laravel-brain.observers.provider_paths', ['app/Providers']);
+        $this->observerAnalyzer = new ObserverAnalyzer(
+            is_array($observerModelPaths) ? $observerModelPaths : [],
+            is_array($observerProviderPaths) ? $observerProviderPaths : [],
         );
 
         $cmdConfig = config('laravel-brain.commands', []);
@@ -175,6 +184,11 @@ class ProjectAnalyzer
         $models = $this->modelAnalyzer->analyze($projectRoot, $modelFqcns);
         $this->emit('step:done', ['step' => 'models', 'count' => count($models), 'unit' => 'model', 'message' => '    Found '.count($models).' model(s)']);
 
+        $this->emit('step:start', ['step' => 'observers', 'label' => 'Scanning model observers', 'message' => '  → Scanning model observers...']);
+        $observerMap = $this->observerAnalyzer->analyze($projectRoot);
+        $observerCount = array_sum(array_map('count', $observerMap));
+        $this->emit('step:done', ['step' => 'observers', 'count' => $observerCount, 'unit' => 'observer', 'message' => '    Found '.$observerCount.' model-observer link(s)']);
+
         $this->emit('step:start', ['step' => 'commands', 'label' => 'Scanning console commands', 'message' => '  → Scanning console commands...']);
         $consoleResult = $this->consoleAnalyzer->analyze($projectRoot);
         $commands = $consoleResult['commands'];
@@ -265,6 +279,7 @@ class ProjectAnalyzer
         );
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);
+        $this->graphBuilder->addObservers($observerMap);
         if ($filamentResult['detected']) {
             $this->graphBuilder->addFilament(
                 $filamentResult['panels'],
