@@ -47,6 +47,8 @@ class ProjectAnalyzer
 
     private ListenerAnalyzer $listenerAnalyzer;
 
+    private PolicyAnalyzer $policyAnalyzer;
+
     private FilamentAnalyzer $filamentAnalyzer;
 
     private QueryTracer $queryTracer;
@@ -75,6 +77,11 @@ class ProjectAnalyzer
         $this->listenerAnalyzer = new ListenerAnalyzer(
             is_array($listenerPaths) ? $listenerPaths : [],
             is_array($providerPaths) ? $providerPaths : [],
+        );
+
+        $policyProviderPaths = config('laravel-brain.policies.provider_paths', ['app/Providers']);
+        $this->policyAnalyzer = new PolicyAnalyzer(
+            is_array($policyProviderPaths) ? $policyProviderPaths : [],
         );
 
         $cmdConfig = config('laravel-brain.commands', []);
@@ -175,6 +182,10 @@ class ProjectAnalyzer
         $models = $this->modelAnalyzer->analyze($projectRoot, $modelFqcns);
         $this->emit('step:done', ['step' => 'models', 'count' => count($models), 'unit' => 'model', 'message' => '    Found '.count($models).' model(s)']);
 
+        $this->emit('step:start', ['step' => 'policies', 'label' => 'Resolving authorization policies', 'message' => '  → Resolving authorization policies...']);
+        $policyMap = $this->policyAnalyzer->analyze($projectRoot, $modelFqcns, $psr4Map);
+        $this->emit('step:done', ['step' => 'policies', 'count' => count($policyMap), 'unit' => 'policy', 'message' => '    Found '.count($policyMap).' model-policy link(s)']);
+
         $this->emit('step:start', ['step' => 'commands', 'label' => 'Scanning console commands', 'message' => '  → Scanning console commands...']);
         $consoleResult = $this->consoleAnalyzer->analyze($projectRoot);
         $commands = $consoleResult['commands'];
@@ -265,6 +276,7 @@ class ProjectAnalyzer
         );
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);
+        $this->graphBuilder->addPolicies($policyMap);
         if ($filamentResult['detected']) {
             $this->graphBuilder->addFilament(
                 $filamentResult['panels'],

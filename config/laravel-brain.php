@@ -212,6 +212,25 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Authorization Policies
+    // -------------------------------------------------------------------------
+    // Model → policy edges are resolved the way Laravel's Gate resolves a
+    // policy, in precedence order:
+    //   - explicit: an AuthServiceProvider::$policies map or a
+    //     Gate::policy(Model::class, Policy::class) call in a provider under
+    //     "provider_paths";
+    //   - attribute: a model marked #[UsePolicy(Policy::class)];
+    //   - convention: the guessed App\Policies\FooPolicy for App\Models\Foo,
+    //     used only when that policy class exists.
+    // So the graph shows which policy authorizes each model.
+    //
+    'policies' => [
+        'provider_paths' => [
+            'app/Providers',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Command Entry Points
     // -------------------------------------------------------------------------
     // Laravel commands are registered through three distinct entry points.

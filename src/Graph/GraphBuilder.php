@@ -1792,6 +1792,43 @@ class GraphBuilder
         ]));
     }
 
+    /**
+     * Wire model → policy edges discovered by PolicyAnalyzer. The edge shares
+     * the canonical model node (model::FQCN), so a model's authorization policy
+     * sits alongside its fired-event and relationship edges.
+     *
+     * @param  array<string, string>  $policyMap  model FQCN => policy FQCN
+     */
+    public function addPolicies(array $policyMap): void
+    {
+        foreach ($policyMap as $modelFqcn => $policyFqcn) {
+            $modelId = $this->modelId($modelFqcn);
+            if (! $this->graph->hasNode($modelId)) {
+                $this->addModelNode($modelFqcn, null, $modelId);
+            }
+            $policyId = $this->policyId($policyFqcn);
+            $this->addPolicyNode($policyFqcn, $policyId);
+            $this->addEdge($modelId, $policyId, 'authorized by', 'model-to-policy');
+        }
+    }
+
+    private function addPolicyNode(string $fqcn, string $id): void
+    {
+        if ($this->graph->hasNode($id)) {
+            return;
+        }
+        $short = class_basename($fqcn);
+        $file = $this->resolveFile($fqcn);
+        $members = ($file !== '' && is_file($file))
+            ? $this->getStructureInspector()->listClassMethods($file)
+            : [];
+        $this->graph->addNode(new Node($id, 'policy', $short, [
+            'fqcn' => $fqcn,
+            'file' => $file,
+            'members' => $members,
+        ]));
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function resolveMiddlewares(array $middlewares, MiddlewareRegistry $registry): array
@@ -2036,6 +2073,11 @@ class GraphBuilder
     private function eventId(string $fqcn): string
     {
         return "event::{$fqcn}";
+    }
+
+    private function policyId(string $fqcn): string
+    {
+        return "policy::{$fqcn}";
     }
 
     private function filamentPanelId(string $fqcn): string
