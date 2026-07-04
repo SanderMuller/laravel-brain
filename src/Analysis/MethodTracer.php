@@ -452,7 +452,9 @@ class MethodTracer
                     }
                     $fqcn = $this->parentFqcn;
                 } else {
-                    $fqcn = $this->useMap[$class] ?? $class;
+                    // The parser's resolved name follows imports and same-namespace
+                    // references the local useMap misses; fall back where it can't.
+                    $fqcn = PhpFileParser::resolvedName($node->class) ?? $this->useMap[$class] ?? $class;
                 }
 
                 // Job::dispatch()
@@ -695,7 +697,7 @@ class MethodTracer
                     return;
                 }
                 $class = $node->class->toString();
-                $fqcn = $this->useMap[$class] ?? $class;
+                $fqcn = PhpFileParser::resolvedName($node->class) ?? $this->useMap[$class] ?? $class;
 
                 if ($this->looksLikeJob($fqcn)) {
                     // Caught by dispatch() later; skip to avoid double-counting
@@ -747,7 +749,7 @@ class MethodTracer
                 }
                 $varName = $node->var->name;
                 $class = $node->expr->class->toString();
-                $fqcn = $this->useMap[$class] ?? $class;
+                $fqcn = PhpFileParser::resolvedName($node->expr->class) ?? $this->useMap[$class] ?? $class;
 
                 if (! $this->looksLikeModel($fqcn) && ! $this->isFrameworkClass($fqcn) && str_contains($fqcn, '\\')) {
                     $this->varTypeMap[$varName] = $fqcn;
@@ -767,7 +769,7 @@ class MethodTracer
                 if (in_array($lower, ['self', 'static', 'parent'], true)) {
                     return;
                 }
-                $fqcn = $this->useMap[$short] ?? $short;
+                $fqcn = PhpFileParser::resolvedName($node->class) ?? $this->useMap[$short] ?? $short;
                 if (! str_contains($fqcn, '\\')) {
                     return;
                 }
