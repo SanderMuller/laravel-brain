@@ -47,6 +47,8 @@ class ProjectAnalyzer
 
     private ListenerAnalyzer $listenerAnalyzer;
 
+    private BladeViewAnalyzer $bladeViewAnalyzer;
+
     private FilamentAnalyzer $filamentAnalyzer;
 
     private QueryTracer $queryTracer;
@@ -76,6 +78,8 @@ class ProjectAnalyzer
             is_array($listenerPaths) ? $listenerPaths : [],
             is_array($providerPaths) ? $providerPaths : [],
         );
+
+        $this->bladeViewAnalyzer = new BladeViewAnalyzer;
 
         $cmdConfig = config('laravel-brain.commands', []);
         $this->consoleAnalyzer = new ConsoleAnalyzer(
@@ -283,6 +287,14 @@ class ProjectAnalyzer
                 $this->graphBuilder->addFilamentPageCallChain($filamentPageEdges, $pageNodeIds);
             }
         }
+
+        // Descend into view composition last, so every view node reached by a
+        // route, console, channel, or Filament entry point seeds the walk.
+        $this->emit('step:start', ['step' => 'views', 'label' => 'Mapping view composition', 'message' => '  → Mapping view composition...']);
+        $viewComposition = $this->bladeViewAnalyzer->analyze($projectRoot);
+        $this->graphBuilder->addViewComposition($viewComposition);
+        $this->emit('step:done', ['step' => 'views', 'count' => count($viewComposition), 'unit' => 'composed view', 'message' => '    Mapped '.count($viewComposition).' composing view(s)']);
+
         $this->emit('step:done', ['step' => 'graph', 'count' => $fullGraph->nodeCount(), 'unit' => 'node', 'extra' => $fullGraph->edgeCount().' edges', 'message' => "    {$fullGraph->nodeCount()} nodes, {$fullGraph->edgeCount()} edges"]);
 
         $this->emit('step:start', ['step' => 'split', 'label' => 'Splitting into tab subgraphs', 'message' => '  → Splitting into tab subgraphs...']);

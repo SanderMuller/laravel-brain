@@ -1,0 +1,185 @@
+<?php
+
+declare(strict_types=1);
+
+namespace LaraMint\LaravelBrain\Analysis;
+
+/**
+ * Discovers the view-composition tree: which Blade view renders which other
+ * view, via `@include` / `@includeIf` / `@extends` / `@component` / `@each`
+ * targets and modern `<x-...>` component tags.
+ *
+ * Brain anchors a view to its rendering controller (`action-to-view`) but does
+ * not descend into the views that view itself renders — nested components and
+ * includes are captured only as inert node metadata, with no edge. So a change
+ * to a nested partial reaches no entry point and reads as "no impact". This
+ * analyzer produces the parent → child view map that GraphBuilder turns into
+ * `view-to-view` edges.
+ *
+ * Only references that resolve to a real Blade file under the views directory
+ * are linked, so a class-backed `<x-...>` with no view template, a namespaced
+ * (`pkg::view`) target, or a dynamic (`$var`) name adds no edge. The parsing is
+ * pure over the source ({@see referencedViewNames}) so it is testable without a
+ * filesystem.
+ */
+class BladeViewAnalyzer
+{
+    private const BLADE_EXT = '.blade.php';
+
+    /** Directives whose first string argument is a view name. */
+    private const INCLUDE_PATTERN = '/@(?:include|includeIf|extends|component|each)\s*\(\s*[\'"]([^\'"]+)[\'"]/';
+
+    /** `@includeWhen`/`@includeUnless` take the condition first, the view as the second argument. */
+    private const CONDITIONAL_INCLUDE_PATTERN = '/@include(?:When|Unless)\s*\(\s*[^,]+,\s*[\'"]([^\'"]+)[\'"]/';
+
+    /** `@includeFirst(['a', 'b'])` — every listed view is a candidate. */
+    private const INCLUDE_FIRST_PATTERN = '/@includeFirst\s*\(\s*\[([^\]]*)\]/';
+
+    /** Component tags `<x-foo.bar ...>` / `<x-foo.bar/>` — the dots are path segments under `components/`. */
+    private const COMPONENT_PATTERN = '/<\s*x-([A-Za-z0-9._:-]+)/';
+
+    /** Tags that are not anonymous view components. */
+    private const NON_VIEW_TAGS = ['slot', 'dynamic-component'];
+
+    private string $viewsPath;
+
+    /**
+     * The views directory is fixed to `resources/views` to stay in lockstep with
+     * how the graph builder resolves a view to its file; the parameter exists
+     * only so tests can point at a fixture tree.
+     */
+    public function __construct(string $viewsPath = 'resources/views')
+    {
+        $this->viewsPath = trim($viewsPath, '/') !== '' ? trim($viewsPath, '/') : 'resources/views';
+    }
+
+    /**
+     * @return array<string, list<string>> parent view name => child view names (each an existing Blade file)
+     */
+    public function analyze(string $projectRoot): array
+    {
+        $viewsRoot = rtrim($projectRoot, '/').'/'.$this->viewsPath;
+        if (! is_dir($viewsRoot)) {
+            return [];
+        }
+
+        $map = [];
+        $it = new \RecursiveIteratorIterator(
+            new \RecursiveDirectoryIterator($viewsRoot, \FilesystemIterator::SKIP_DOTS)
+        );
+        foreach ($it as $fileInfo) {
+            if (! $fileInfo->isFile() || ! str_ends_with($fileInfo->getFilename(), self::BLADE_EXT)) {
+                continue;
+            }
+            $parent = $this->viewNameFromPath($fileInfo->getPathname(), $viewsRoot);
+            // Vendor views are addressed as `pkg::view` (namespaced) and never match a
+            // first-party seed, so scanning them only yields dead map entries.
+            if ($parent === null || str_starts_with($parent, 'vendor.')) {
+                continue;
+            }
+
+            $children = [];
+            foreach ($this->referencedViewNames((string) file_get_contents($fileInfo->getPathname())) as $candidate) {
+                if ($this->viewFileExists($viewsRoot, $candidate) && $candidate !== $parent && ! in_array($candidate, $children, true)) {
+                    $children[] = $candidate;
+                }
+            }
+            $children = $this->preferNonIndexComponent($children);
+            if ($children !== []) {
+                $map[$parent] = $children;
+            }
+        }
+
+        return $map;
+    }
+
+    /**
+     * Candidate view names referenced by one Blade source — both `@include`-family
+     * targets and the view a `<x-...>` component resolves to (single-file and
+     * folder-`index` forms are both offered; the caller keeps whichever exists).
+     *
+     * @return list<string>
+     */
+    public function referencedViewNames(string $content): array
+    {
+        $names = [];
+
+        foreach ([self::INCLUDE_PATTERN, self::CONDITIONAL_INCLUDE_PATTERN] as $pattern) {
+            if (preg_match_all($pattern, $content, $matches)) {
+                foreach ($matches[1] as $raw) {
+                    // A namespaced (`pkg::view`) or dynamic (`$var`) name can't be pinned to a file.
+                    if (! str_contains($raw, '::') && ! str_contains($raw, '$')) {
+                        $names[] = $raw;
+                    }
+                }
+            }
+        }
+
+        if (preg_match_all(self::INCLUDE_FIRST_PATTERN, $content, $matches)) {
+            foreach ($matches[1] as $list) {
+                if (preg_match_all('/[\'"]([^\'"]+)[\'"]/', $list, $items)) {
+                    foreach ($items[1] as $raw) {
+                        if (! str_contains($raw, '::') && ! str_contains($raw, '$')) {
+                            $names[] = $raw;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (preg_match_all(self::COMPONENT_PATTERN, $content, $matches)) {
+            foreach ($matches[1] as $tag) {
+                if (in_array($tag, self::NON_VIEW_TAGS, true) || str_contains($tag, '::')) {
+                    continue;
+                }
+                $names[] = 'components.'.$tag;
+                $names[] = 'components.'.$tag.'.index';
+            }
+        }
+
+        return array_values(array_unique($names));
+    }
+
+    private function viewNameFromPath(string $absolutePath, string $viewsRoot): ?string
+    {
+        $prefix = rtrim($viewsRoot, '/').'/';
+        if (! str_starts_with($absolutePath, $prefix)) {
+            return null;
+        }
+        $relative = substr($absolutePath, strlen($prefix));
+        if (! str_ends_with($relative, self::BLADE_EXT)) {
+            return null;
+        }
+        $relative = substr($relative, 0, -strlen(self::BLADE_EXT));
+
+        return str_replace('/', '.', $relative);
+    }
+
+    private function viewFileExists(string $viewsRoot, string $viewName): bool
+    {
+        $rel = str_replace('.', '/', $viewName).self::BLADE_EXT;
+        $root = rtrim($viewsRoot, '/');
+
+        // Mirror the graph builder's resolution: the views root, then its vendor/ overrides.
+        return is_file($root.'/'.$rel) || is_file($root.'/vendor/'.$rel);
+    }
+
+    /**
+     * A `<x-foo>` tag offers both `components.foo` and `components.foo.index`;
+     * when both templates exist Laravel renders the non-index file, so drop the
+     * redundant `.index` alternative to avoid a spurious edge.
+     *
+     * @param  list<string>  $children
+     * @return list<string>
+     */
+    private function preferNonIndexComponent(array $children): array
+    {
+        return array_values(array_filter($children, static function (string $child) use ($children): bool {
+            if (str_starts_with($child, 'components.') && str_ends_with($child, '.index')) {
+                return ! in_array(substr($child, 0, -strlen('.index')), $children, true);
+            }
+
+            return true;
+        }));
+    }
+}
