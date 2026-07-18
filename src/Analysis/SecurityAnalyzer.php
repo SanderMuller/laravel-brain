@@ -558,6 +558,7 @@ class SecurityAnalyzer
     private function middlewareMatches(string $middleware, array $patterns): bool
     {
         $lower = strtolower($middleware);
+        $base = $this->middlewareBasename($middleware);
         foreach ($patterns as $pattern) {
             $p = strtolower($pattern);
             if (str_ends_with($p, ':')) {
@@ -570,10 +571,28 @@ class SecurityAnalyzer
                 if ($lower === $p || str_starts_with($lower, $p.':') || str_starts_with($lower, $p.'\\')) {
                     return true;
                 }
+                // Match a framework middleware by class name alone, so the app's
+                // own same-named subclass (App\Http\Middleware\Authenticate) is
+                // recognised. A name match, not a verified subclass check.
+                if (str_contains($p, '\\') && $base !== '' && $base === $this->middlewareBasename($pattern)) {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    /**
+     * The lowercased class name of a middleware, ignoring any `:params` suffix —
+     * e.g. `App\Http\Middleware\Authenticate:web` → `authenticate`.
+     */
+    private function middlewareBasename(string $middleware): string
+    {
+        $name = explode(':', $middleware, 2)[0];
+        $pos = strrpos($name, '\\');
+
+        return strtolower($pos === false ? $name : substr($name, $pos + 1));
     }
 
     /**

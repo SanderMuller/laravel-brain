@@ -359,9 +359,14 @@ class GraphBuilder
      */
     private function extractExtendsFromAst(array $ast, string $ns, array $useMap): ?string
     {
+        // Find the namespace wherever it sits: a leading `declare(strict_types=1);` shifts it off
+        // index 0, which used to break the inheritance walk for strict-typed child classes.
         $stmts = $ast;
-        if (isset($stmts[0]) && $stmts[0] instanceof PhpNode\Stmt\Namespace_) {
-            $stmts = $stmts[0]->stmts;
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof PhpNode\Stmt\Namespace_) {
+                $stmts = $stmt->stmts;
+                break;
+            }
         }
         foreach ($stmts as $stmt) {
             if ($stmt instanceof PhpNode\Stmt\Class_ && $stmt->extends !== null) {
@@ -654,6 +659,7 @@ class GraphBuilder
 
             case 'mail':
             case 'notification':
+            case 'resource':
                 $short = class_basename($fqcn);
                 $file = $this->resolveFile($fqcn);
                 $flowSteps = $method !== '' ? $this->extractMethodFlowSteps($fqcn, $method) : [];
@@ -857,6 +863,11 @@ class GraphBuilder
 
     private function classifyFqcn(string $fqcn): string
     {
+        // API resources live under \Http\Resources\ — check before the controller
+        // heuristic, which would otherwise claim any \Http\ class as an action.
+        if (str_contains($fqcn, '\\Http\\Resources\\')) {
+            return 'resource';
+        }
         if ($this->isController($fqcn)) {
             return 'action';
         }
@@ -925,6 +936,7 @@ class GraphBuilder
             'model' => 'queries',
             'job' => 'dispatches',
             'event' => 'dispatches',
+            'resource' => 'transforms',
             'listener' => 'handled by',
             'repository' => 'calls',
             'validation_request' => 'validates',
@@ -1849,6 +1861,58 @@ class GraphBuilder
         ]));
     }
 
+    /**
+     * Wire model → observer edges discovered by ObserverAnalyzer. The edge
+     * shares the canonical model node (model::FQCN), so observers sit alongside
+     * the model's fired-event and relationship edges rather than on the mangled
+     * hop node a call chain would create.
+     *
+     * @param  array<string, list<string>>  $observerMap  model FQCN => observer FQCNs
+     */
+    public function addObservers(array $observerMap): void
+    {
+        foreach ($observerMap as $modelFqcn => $observerFqcns) {
+            $modelId = $this->modelId($modelFqcn);
+            if (! $this->graph->hasNode($modelId)) {
+                $this->addModelNode($modelFqcn, null, $modelId);
+            }
+            foreach ($observerFqcns as $observerFqcn) {
+                $observerId = $this->observerId($observerFqcn);
+                $this->addObserverNode($observerFqcn, $observerId);
+                $this->addEdge($modelId, $observerId, 'observed by', 'model-to-observer');
+            }
+        }
+    }
+
+    private function addObserverNode(string $fqcn, string $id): void
+    {
+        if ($this->graph->hasNode($id)) {
+            return;
+        }
+        $short = class_basename($fqcn);
+        $this->graph->addNode(new Node($id, 'observer', $short, [
+            'fqcn' => $fqcn,
+            'file' => $this->resolveFile($fqcn),
+            'members' => $this->observerMembers($fqcn),
+        ]));
+    }
+
+    /**
+     * The Eloquent lifecycle hooks an observer actually implements (created,
+     * updated, deleted, …), so the node can show which events it handles.
+     *
+     * @return list<array{name: string, static: bool, visibility: string}>
+     */
+    private function observerMembers(string $fqcn): array
+    {
+        $file = $this->resolveFile($fqcn);
+        if ($file === '' || ! is_file($file)) {
+            return [];
+        }
+
+        return $this->getStructureInspector()->listClassMethods($file);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function resolveMiddlewares(array $middlewares, MiddlewareRegistry $registry): array
@@ -2093,6 +2157,11 @@ class GraphBuilder
     private function eventId(string $fqcn): string
     {
         return "event::{$fqcn}";
+    }
+
+    private function observerId(string $fqcn): string
+    {
+        return "observer::{$fqcn}";
     }
 
     private function filamentPanelId(string $fqcn): string

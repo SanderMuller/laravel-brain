@@ -66,9 +66,15 @@ final class ContainerBindingAnalyzer
         $useMap = $parsed['useMap'];
         $ns = PhpExtendsFqcnResolver::namespaceFromAst($ast);
 
+        // Find the namespace wherever it sits: a leading `declare(strict_types=1);` shifts it off
+        // index 0, which used to make the scan silently skip the whole provider. Same iteration
+        // PhpExtendsFqcnResolver::namespaceFromAst() uses to resolve $ns above.
         $stmts = $ast;
-        if (isset($stmts[0]) && $stmts[0] instanceof Namespace_) {
-            $stmts = $stmts[0]->stmts;
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                $stmts = $stmt->stmts;
+                break;
+            }
         }
 
         foreach ($stmts as $stmt) {

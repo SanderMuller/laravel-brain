@@ -77,6 +77,57 @@ it('classifies a custom auth alias as authed when its resolved FQCN is in extra 
     expect(exposure($route, $registry, ['App\Http\Middleware\CustomAuth']))->toBe('authed');
 });
 
+it('classifies the app Authenticate subclass as authed (nested-group false positive)', function () {
+    // The app applies its own middleware, which subclasses the framework one.
+    $route = makeSecurityRoute('GET', '/dashboard', ['web', 'App\Http\Middleware\Authenticate']);
+    $registry = new MiddlewareRegistry([], [], []);
+
+    expect(exposure($route, $registry))->toBe('authed');
+});
+
+it('classifies a route guarded by an inherited group auth stack as admin, not public', function () {
+    // The full nested-group stack from laramint/laravel-brain#59.
+    $route = makeSecurityRoute('DELETE', '/admin/categories/{category}', [
+        'web',
+        'App\Http\Middleware\Authenticate',
+        'App\Http\Middleware\ForcePasswordReset',
+        'role:admin',
+    ]);
+    $registry = new MiddlewareRegistry([], [], []);
+
+    expect(exposure($route, $registry))->toBe('admin');
+});
+
+it('does not raise PUBLIC_WRITE on a mutating route behind the app auth stack', function () {
+    // The reporter's concrete symptom: a DELETE inside an authenticated group.
+    $route = makeSecurityRoute('DELETE', '/admin/categories/{category}', [
+        'web',
+        'App\Http\Middleware\Authenticate',
+        'role:admin',
+    ]);
+    $analyzer = new SecurityAnalyzer;
+    $results = $analyzer->analyze([$route], new MiddlewareRegistry([], [], []), [], '');
+    $types = array_map(fn ($i) => $i->type, $results['route::DELETE::/admin/categories/{category}']['issues']);
+
+    expect($types)->not->toContain('PUBLIC_WRITE');
+});
+
+it('treats an app RedirectIfAuthenticated subclass as guest', function () {
+    $route = makeSecurityRoute('GET', '/login', ['web', 'App\Http\Middleware\RedirectIfAuthenticated']);
+    $registry = new MiddlewareRegistry([], [], []);
+
+    expect(exposure($route, $registry))->toBe('guest');
+});
+
+it('does not treat a same-prefixed non-auth middleware as authentication', function () {
+    // AuthenticateSession binds the session; it is not the auth gate, and its
+    // class name differs from Authenticate, so it must not flip the exposure.
+    $route = makeSecurityRoute('GET', '/open', ['web', 'App\Http\Middleware\AuthenticateSession']);
+    $registry = new MiddlewareRegistry([], [], []);
+
+    expect(exposure($route, $registry))->toBe('public');
+});
+
 // =============================================================================
 // False-positive fixes for UNVALIDATED_INPUT, PUBLIC_WRITE and MISSING_THROTTLE
 // =============================================================================
