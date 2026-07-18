@@ -654,6 +654,7 @@ class GraphBuilder
 
             case 'mail':
             case 'notification':
+            case 'resource':
                 $short = class_basename($fqcn);
                 $file = $this->resolveFile($fqcn);
                 $flowSteps = $method !== '' ? $this->extractMethodFlowSteps($fqcn, $method) : [];
@@ -857,6 +858,11 @@ class GraphBuilder
 
     private function classifyFqcn(string $fqcn): string
     {
+        // API resources live under \Http\Resources\ — check before the controller
+        // heuristic, which would otherwise claim any \Http\ class as an action.
+        if (str_contains($fqcn, '\\Http\\Resources\\')) {
+            return 'resource';
+        }
         if ($this->isController($fqcn)) {
             return 'action';
         }
@@ -925,6 +931,7 @@ class GraphBuilder
             'model' => 'queries',
             'job' => 'dispatches',
             'event' => 'dispatches',
+            'resource' => 'transforms',
             'listener' => 'handled by',
             'repository' => 'calls',
             'validation_request' => 'validates',
