@@ -359,9 +359,14 @@ class GraphBuilder
      */
     private function extractExtendsFromAst(array $ast, string $ns, array $useMap): ?string
     {
+        // Find the namespace wherever it sits: a leading `declare(strict_types=1);` shifts it off
+        // index 0, which used to break the inheritance walk for strict-typed child classes.
         $stmts = $ast;
-        if (isset($stmts[0]) && $stmts[0] instanceof PhpNode\Stmt\Namespace_) {
-            $stmts = $stmts[0]->stmts;
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof PhpNode\Stmt\Namespace_) {
+                $stmts = $stmt->stmts;
+                break;
+            }
         }
         foreach ($stmts as $stmt) {
             if ($stmt instanceof PhpNode\Stmt\Class_ && $stmt->extends !== null) {

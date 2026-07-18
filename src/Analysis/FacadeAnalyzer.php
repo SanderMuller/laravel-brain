@@ -322,8 +322,13 @@ final class FacadeAnalyzer
         if (! is_array($ast)) {
             return [];
         }
-        if (isset($ast[0]) && $ast[0] instanceof Namespace_) {
-            return $ast[0]->stmts;
+
+        // Find the namespace wherever it sits: a leading `declare(strict_types=1);` shifts it off
+        // index 0, which used to make every scan through here silently skip the whole file.
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                return $stmt->stmts;
+            }
         }
 
         return $ast;
