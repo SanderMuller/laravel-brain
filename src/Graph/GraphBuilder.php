@@ -1792,6 +1792,58 @@ class GraphBuilder
         ]));
     }
 
+    /**
+     * Wire model → observer edges discovered by ObserverAnalyzer. The edge
+     * shares the canonical model node (model::FQCN), so observers sit alongside
+     * the model's fired-event and relationship edges rather than on the mangled
+     * hop node a call chain would create.
+     *
+     * @param  array<string, list<string>>  $observerMap  model FQCN => observer FQCNs
+     */
+    public function addObservers(array $observerMap): void
+    {
+        foreach ($observerMap as $modelFqcn => $observerFqcns) {
+            $modelId = $this->modelId($modelFqcn);
+            if (! $this->graph->hasNode($modelId)) {
+                $this->addModelNode($modelFqcn, null, $modelId);
+            }
+            foreach ($observerFqcns as $observerFqcn) {
+                $observerId = $this->observerId($observerFqcn);
+                $this->addObserverNode($observerFqcn, $observerId);
+                $this->addEdge($modelId, $observerId, 'observed by', 'model-to-observer');
+            }
+        }
+    }
+
+    private function addObserverNode(string $fqcn, string $id): void
+    {
+        if ($this->graph->hasNode($id)) {
+            return;
+        }
+        $short = class_basename($fqcn);
+        $this->graph->addNode(new Node($id, 'observer', $short, [
+            'fqcn' => $fqcn,
+            'file' => $this->resolveFile($fqcn),
+            'members' => $this->observerMembers($fqcn),
+        ]));
+    }
+
+    /**
+     * The Eloquent lifecycle hooks an observer actually implements (created,
+     * updated, deleted, …), so the node can show which events it handles.
+     *
+     * @return list<array{name: string, static: bool, visibility: string}>
+     */
+    private function observerMembers(string $fqcn): array
+    {
+        $file = $this->resolveFile($fqcn);
+        if ($file === '' || ! is_file($file)) {
+            return [];
+        }
+
+        return $this->getStructureInspector()->listClassMethods($file);
+    }
+
     // ── Helpers ───────────────────────────────────────────────────────────────
 
     private function resolveMiddlewares(array $middlewares, MiddlewareRegistry $registry): array
@@ -2036,6 +2088,11 @@ class GraphBuilder
     private function eventId(string $fqcn): string
     {
         return "event::{$fqcn}";
+    }
+
+    private function observerId(string $fqcn): string
+    {
+        return "observer::{$fqcn}";
     }
 
     private function filamentPanelId(string $fqcn): string
