@@ -84,3 +84,17 @@ it('resolveWith does not overwrite an already-resolved concreteFqcn', function (
     $record = $facadeRegistry->get('App\Services\V3\ShortUrlV3Facade');
     expect($record?->concreteFqcn)->toBe('App\Services\V3\ShortUrlV3Service');
 });
+
+it('discovers a facade whose files open with declare(strict_types=1)', function () {
+    $registry = (new FacadeAnalyzer)->analyze(fixture('strict-types-project'));
+
+    // Both the concrete facade and the abstract parent carrying getFacadeAccessor() open with
+    // declare(strict_types=1), so the Namespace_ node is never at index 0 — this exercises the
+    // unwrap in scanFile(), isInFacadeChain() and findAccessorInChain() in one chain.
+    $record = $registry->get('App\Support\Facades\StrictClockFacade');
+
+    expect($record)
+        ->toBeInstanceOf(FacadeRecord::class)
+        ->accessor->toBe('App\Support\SystemClock')
+        ->concreteFqcn->toBe('App\Support\SystemClock');
+});

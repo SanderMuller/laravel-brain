@@ -47,6 +47,8 @@ class ProjectAnalyzer
 
     private ListenerAnalyzer $listenerAnalyzer;
 
+    private ObserverAnalyzer $observerAnalyzer;
+
     private PolicyAnalyzer $policyAnalyzer;
 
     private FilamentAnalyzer $filamentAnalyzer;
@@ -77,6 +79,13 @@ class ProjectAnalyzer
         $this->listenerAnalyzer = new ListenerAnalyzer(
             is_array($listenerPaths) ? $listenerPaths : [],
             is_array($providerPaths) ? $providerPaths : [],
+        );
+
+        $observerModelPaths = config('laravel-brain.observers.model_paths', ['app/Models']);
+        $observerProviderPaths = config('laravel-brain.observers.provider_paths', ['app/Providers']);
+        $this->observerAnalyzer = new ObserverAnalyzer(
+            is_array($observerModelPaths) ? $observerModelPaths : [],
+            is_array($observerProviderPaths) ? $observerProviderPaths : [],
         );
 
         $policyProviderPaths = config('laravel-brain.policies.provider_paths', ['app/Providers']);
@@ -182,6 +191,11 @@ class ProjectAnalyzer
         $models = $this->modelAnalyzer->analyze($projectRoot, $modelFqcns);
         $this->emit('step:done', ['step' => 'models', 'count' => count($models), 'unit' => 'model', 'message' => '    Found '.count($models).' model(s)']);
 
+        $this->emit('step:start', ['step' => 'observers', 'label' => 'Scanning model observers', 'message' => '  → Scanning model observers...']);
+        $observerMap = $this->observerAnalyzer->analyze($projectRoot);
+        $observerCount = array_sum(array_map('count', $observerMap));
+        $this->emit('step:done', ['step' => 'observers', 'count' => $observerCount, 'unit' => 'observer', 'message' => '    Found '.$observerCount.' model-observer link(s)']);
+
         $this->emit('step:start', ['step' => 'policies', 'label' => 'Resolving authorization policies', 'message' => '  → Resolving authorization policies...']);
         $policyMap = $this->policyAnalyzer->analyze($projectRoot, $modelFqcns, $psr4Map);
         $this->emit('step:done', ['step' => 'policies', 'count' => count($policyMap), 'unit' => 'policy', 'message' => '    Found '.count($policyMap).' model-policy link(s)']);
@@ -276,6 +290,7 @@ class ProjectAnalyzer
         );
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);
+        $this->graphBuilder->addObservers($observerMap);
         $this->graphBuilder->addPolicies($policyMap);
         if ($filamentResult['detected']) {
             $this->graphBuilder->addFilament(
