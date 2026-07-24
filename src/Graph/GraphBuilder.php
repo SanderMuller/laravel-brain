@@ -45,6 +45,9 @@ class GraphBuilder
 
     private array $psr4Map = [];
 
+    /** @var array<string, string> FQCN => resolved path ('' when unresolvable), per build */
+    private array $resolveFileMemo = [];
+
     /**
      * Maximum number of parsed file ASTs to keep in memory at once.
      * Oldest entries are evicted when the limit is reached to prevent OOM on large codebases.
@@ -149,8 +152,16 @@ class GraphBuilder
 
     /**
      * Resolve an FQCN to an absolute file path using the PSR-4 map.
+     *
+     * Memoized for the build: the answer depends only on the FQCN, the PSR-4 map and the
+     * project root, all fixed once buildGraph() starts.
      */
     private function resolveFile(string $fqcn): string
+    {
+        return $this->resolveFileMemo[$fqcn] ??= $this->resolveFileUncached($fqcn);
+    }
+
+    private function resolveFileUncached(string $fqcn): string
     {
         // Livewire v2 namespace::dot.notation (e.g. 'pages::password.create')
         if (str_contains($fqcn, '::') && ! str_contains($fqcn, '\\')) {
