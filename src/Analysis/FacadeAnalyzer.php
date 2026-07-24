@@ -62,10 +62,27 @@ final class FacadeAnalyzer
             if ($file->getExtension() !== 'php') {
                 continue;
             }
+            if (! $this->mightDefineFacade($file->getPathname())) {
+                continue;
+            }
             $this->scanFile($file->getPathname(), $registry);
         }
 
         return $registry;
+    }
+
+    /**
+     * A facade reaches Facade through `extends`, so a file without the keyword cannot define
+     * one. Crude in the safe direction: `extends` in a comment or a string only costs a scan
+     * that would have happened anyway.
+     */
+    private function mightDefineFacade(string $file): bool
+    {
+        $code = @file_get_contents($file);
+
+        // stripos, not str_contains: PHP keywords are case-insensitive, and `class X EXTENDS Y`
+        // is valid source.
+        return $code !== false && stripos($code, 'extends') !== false;
     }
 
     private function scanFile(string $file, FacadeRegistry $registry): void
