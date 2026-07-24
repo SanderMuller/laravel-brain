@@ -33,6 +33,8 @@ final class FacadeAnalyzer
 
     private string $appDir = '';
 
+    private string $projectRoot = '';
+
     /** @var array<string, array{ast: mixed, useMap: array<string,string>}|null> */
     private array $parseCache = [];
 
@@ -45,7 +47,8 @@ final class FacadeAnalyzer
     {
         $registry = new FacadeRegistry;
         $this->parseCache = [];
-        $this->appDir = rtrim($projectRoot, '/').'/app';
+        $this->projectRoot = rtrim($projectRoot, '/');
+        $this->appDir = $this->projectRoot.'/app';
 
         if (! is_dir($this->appDir)) {
             return $registry;
@@ -276,7 +279,7 @@ final class FacadeAnalyzer
      */
     private function findFileInAppDir(string $fqcn): ?string
     {
-        if ($this->appDir === '' || ! is_dir($this->appDir)) {
+        if ($this->projectRoot === '') {
             return null;
         }
 
@@ -284,17 +287,7 @@ final class FacadeAnalyzer
             ? substr($fqcn, strrpos($fqcn, '\\') + 1)
             : $fqcn;
 
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($this->appDir, \FilesystemIterator::SKIP_DOTS)
-        );
-
-        foreach ($iterator as $file) {
-            if ($file->getFilename() === $shortName.'.php') {
-                return $file->getPathname();
-            }
-        }
-
-        return null;
+        return ProjectFileIndex::findFile($this->projectRoot, ['app'], $shortName.'.php');
     }
 
     /**

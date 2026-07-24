@@ -23,6 +23,7 @@ use LaraMint\LaravelBrain\Analysis\MethodTracer;
 use LaraMint\LaravelBrain\Analysis\MiddlewareRegistry;
 use LaraMint\LaravelBrain\Analysis\ModelDefinition;
 use LaraMint\LaravelBrain\Analysis\PhpStructureInspector;
+use LaraMint\LaravelBrain\Analysis\ProjectFileIndex;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 use LaraMint\LaravelBrain\Analysis\ScheduleEntry;
 use LaraMint\LaravelBrain\Analysis\ValidationRulesExtractor;
@@ -212,24 +213,7 @@ class GraphBuilder
 
         $filename = $shortName.'.php';
 
-        foreach (['app', 'src'] as $dir) {
-            $base = $this->projectRoot.'/'.$dir;
-            if (! is_dir($base)) {
-                continue;
-            }
-
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->getFilename() === $filename) {
-                    return $file->getPathname();
-                }
-            }
-        }
-
-        return '';
+        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename) ?? '';
     }
 
     /**

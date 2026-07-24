@@ -1208,24 +1208,7 @@ class MethodTracer
 
         $filename = $shortName.'.php';
 
-        foreach (['app', 'src'] as $dir) {
-            $base = $this->projectRoot.'/'.$dir;
-            if (! is_dir($base)) {
-                continue;
-            }
-
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->getFilename() === $filename) {
-                    return $file->getPathname();
-                }
-            }
-        }
-
-        return null;
+        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename);
     }
 
     private function fallbackEntryMethod(string $fqcn, string $requested, array $methods): string
