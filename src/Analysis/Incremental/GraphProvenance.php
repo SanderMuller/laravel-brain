@@ -14,13 +14,23 @@ use LaraMint\LaravelBrain\Graph\Graph;
  *  - A NODE is owned by its `data.file` (every node carries it; blade/virtual nodes without a
  *    real file land in the '' bucket and are treated as always-rebuilt).
  *  - An EDGE is owned by the file of its SOURCE node — the call originates in that file's code,
- *    so editing the caller is what adds/removes the edge. (An edge also implicitly depends on
- *    its TARGET node existing; the merge step, not this partition, prunes edges left dangling
- *    when a target file is deleted — that cross-file case is why incremental falls back to a
- *    full rebuild unless the change is provably contained.)
+ *    so editing the caller is what adds/removes the edge.
  *
- * Content-addressed ids (ID1 for edges, nodeIdForHop for nodes) make every id stable across
- * rebuilds, so a partition captured from one build is directly comparable to the next.
+ * IMPORTANT — this partition is NECESSARY BUT NOT SUFFICIENT as a merge dirty set (proven on a
+ * real corpus; a fixtures-only check missed it). Editing a controller to dispatch a job adds an
+ * edge whose SOURCE is the controller (correctly in the controller's partition) but whose TARGET
+ * node (job::handle) is owned by the JOB's file — so a partition-only dirty set silently
+ * under-updates the dispatch target. The sound merge dirty set is therefore:
+ *
+ *     dirty = (edited files' partitions)  ∪  (1-hop closure over the edit's EDGE DELTA:
+ *             for every edge added / removed / changed while re-analysing the edited files,
+ *             also refresh the FOREIGN node that edge targets)
+ *
+ * The blast-radius census measured that closure at ≤1 node/edit, so it stays cheap. The merge
+ * step owns that closure (and dangling-edge pruning when a target file is deleted); this class
+ * only provides the partition it starts from. Content-addressed ids (ID1 for edges, nodeIdForHop
+ * for nodes) make every id stable across rebuilds, so a partition captured from one build is
+ * directly comparable to the next.
  */
 final class GraphProvenance
 {
