@@ -8,6 +8,7 @@ use LaraMint\LaravelBrain\Parser\PhpExtendsFqcnResolver;
 use LaraMint\LaravelBrain\Parser\PhpFileParser;
 use PhpParser\Node;
 use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor;
 use PhpParser\NodeVisitorAbstract;
 
 /**
@@ -1122,6 +1123,10 @@ class MethodTracer
                     }
 
                     $this->methods[$name] = $node;
+
+                    // Collecting signatures does not need the body, and not descending stops a
+                    // method of an anonymous class inside it from overwriting this one.
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
                 }
 
                 return null;
