@@ -8,6 +8,7 @@ use LaraMint\LaravelBrain\Graph\Graph;
 use LaraMint\LaravelBrain\Graph\GraphBuilder;
 use LaraMint\LaravelBrain\Graph\GraphSplitter;
 use LaraMint\LaravelBrain\Graph\TabManifestEntry;
+use LaraMint\LaravelBrain\Parser\PhpFileParser;
 
 class AnalysisResult
 {
@@ -136,6 +137,8 @@ class ProjectAnalyzer
 
         // Rebuilt per analysis, so a rescan sees files added since the previous one.
         ProjectFileIndex::clear();
+
+        $this->enableAstCache($projectRoot);
 
         $appName = function_exists('config') ? config('app.name') : null;
         $projectName = (is_string($appName) && $appName !== '') ? $appName : 'Laravel Brain';
@@ -345,6 +348,10 @@ class ProjectAnalyzer
             unresolvedDispatchers: $this->methodTracer->unresolvedDispatchers(),
         );
 
+        // Everything parsed during the scan goes to disk in one pass, here rather than earlier:
+        // the graph phase parses too, and flushing before it would leave those results unwritten.
+        PhpFileParser::flushDiskCache();
+
         $this->emit('analysis:done', [
             'nodes' => $fullGraph->nodeCount(),
             'edges' => $fullGraph->edgeCount(),
@@ -358,6 +365,28 @@ class ProjectAnalyzer
         ]);
 
         return $result;
+    }
+
+    /**
+     * Turn on the persistent AST cache when the application asks for it.
+     *
+     * Only ever enables: a caller that pointed the parser at its own directory keeps it, and a
+     * scan never silently switches the cache off underneath one.
+     */
+    private function enableAstCache(string $projectRoot): void
+    {
+        $config = function_exists('config') ? config('laravel-brain.ast_cache', []) : [];
+        if (! is_array($config) || ! filter_var($config['enabled'] ?? false, FILTER_VALIDATE_BOOL)) {
+            return;
+        }
+
+        $path = $config['path'] ?? null;
+
+        PhpFileParser::useDiskCache(
+            is_string($path) && $path !== ''
+                ? $path
+                : $projectRoot.'/storage/framework/cache/laravel-brain-ast',
+        );
     }
 
     private function emit(string $event, array $data = []): void

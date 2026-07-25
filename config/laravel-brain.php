@@ -19,6 +19,36 @@ return [
     //
     'driver' => env('LARAVEL_BRAIN_DRIVER', 'file'),
 
+    // -------------------------------------------------------------------------
+    // Persistent AST Cache
+    // -------------------------------------------------------------------------
+    // A scan parses every PHP file in the application. Most of them have not
+    // changed since the last scan, so their parse results can be kept between
+    // runs and read back instead. Worth roughly a third of a repeated build,
+    // and most useful in CI, where every job starts with nothing in memory.
+    //
+    // Off by default: it requires the igbinary extension (without it Brain
+    // simply parses as usual), and it writes files, so it should not appear in
+    // storage/ unannounced.
+    //
+    // Entries are keyed by path, modification time, size and engine version, so
+    // an edited file is re-parsed and a PHP or php-parser upgrade invalidates
+    // what is stored. Deleting the directory is always safe.
+    //
+    'ast_cache' => [
+
+        // Enable with LARAVEL_BRAIN_AST_CACHE=true.
+        //
+        'enabled' => env('LARAVEL_BRAIN_AST_CACHE', false),
+
+        // Where to keep it. Defaults to storage/framework/cache/laravel-brain-ast
+        // under the scanned project. The directory holds serialized objects that
+        // Brain reads back, so keep it app-private and out of version control.
+        //
+        'path' => env('LARAVEL_BRAIN_AST_CACHE_PATH'),
+
+    ],
+
     // Settings for the 'database' driver.
     //
     'database' => [
