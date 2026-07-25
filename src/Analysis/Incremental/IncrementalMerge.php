@@ -107,6 +107,71 @@ final class IncrementalMerge
     }
 
     /**
+     * Apply a SCOPED rebuild: fold the fresh contribution of the changed files ($partial — a graph
+     * built from only those files plus their reachable downstream) into the previous full graph,
+     * reusing every element the change didn't touch.
+     *
+     * Correctness precondition (the caller MUST enforce, falling back to a full rebuild otherwise):
+     * the set of edges owned by the changed files is IDENTICAL in $old and $partial — i.e. the edit
+     * changed node bodies but not the call graph. Under that precondition there is no edge delta and
+     * no reachability change, so the dirty set is exactly the changed files' own nodes (their
+     * flow/metrics data), and every other node and every edge is reused verbatim from $old. (Edge
+     * additions/removals and their cross-file reachability effects are the next slice; until then
+     * they take the full-rebuild path, so output is always correct.)
+     */
+    public static function applyPartial(Graph $old, Graph $partial, array $changedFiles): Graph
+    {
+        $dirtyNodes = [];
+        foreach (GraphProvenance::of($old)->nodeIdsForFiles(...$changedFiles) as $id) {
+            $dirtyNodes[$id] = true;
+        }
+        foreach (GraphProvenance::of($partial)->nodeIdsForFiles(...$changedFiles) as $id) {
+            $dirtyNodes[$id] = true;
+        }
+
+        $partialNodes = [];
+        foreach ($partial->nodes() as $n) {
+            $partialNodes[$n->id] = $n;
+        }
+
+        $result = new Graph;
+        // Reused, untouched nodes from the previous build...
+        foreach ($old->nodes() as $n) {
+            if (! isset($dirtyNodes[$n->id])) {
+                $result->addNode($n);
+            }
+        }
+        // ...and the changed files' own nodes, freshly rebuilt.
+        foreach ($old->nodes() as $n) {
+            if (isset($dirtyNodes[$n->id]) && isset($partialNodes[$n->id])) {
+                $result->addNode($partialNodes[$n->id]);
+            }
+        }
+        // Edges are unchanged under the precondition — carry them all from $old (stable ids).
+        foreach ($old->edges() as $e) {
+            $result->addEdge($e);
+        }
+
+        return $result;
+    }
+
+    /**
+     * Edge ids owned by the given files within a graph — used by the orchestrator to verify the
+     * scoped rebuild's call graph matches the previous build (the applyPartial precondition).
+     *
+     * @return array<string, true>
+     */
+    public static function ownedEdgeIdSet(Graph $graph, array $files): array
+    {
+        $set = [];
+        foreach (GraphProvenance::of($graph)->edgeIdsForFiles(...$files) as $id) {
+            $set[$id] = true;
+        }
+
+        return $set;
+    }
+
+    /**
      * Content signature of a graph's elements, independent of build metadata (analyzedAt etc.) and
      * insertion order — for asserting two graphs are behaviourally identical.
      *
