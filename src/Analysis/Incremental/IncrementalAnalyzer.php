@@ -75,10 +75,11 @@ final class IncrementalAnalyzer
 
         $partial = ($this->scopedBuild)($projectRoot, $modified);
 
-        // Precondition for the fast path: the changed files' call graph is intact (same owned
-        // edge ids old vs scoped). If not, the edit changed edges/reachability -> full rebuild.
-        if (IncrementalMerge::ownedEdgeIdSet($this->prevGraph, $modified)
-            != IncrementalMerge::ownedEdgeIdSet($partial, $modified)) {
+        // Precondition for the fast path: the changed files' call graph is intact (the same owned
+        // edges old vs scoped, compared by content). If not, the edit changed edges/reachability
+        // -> full rebuild.
+        if (IncrementalMerge::ownedEdgeKeySet($this->prevGraph, $modified)
+            != IncrementalMerge::ownedEdgeKeySet($partial, $modified)) {
             return $this->full($projectRoot, $fp);
         }
 

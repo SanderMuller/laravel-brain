@@ -42,29 +42,31 @@ final class IncrementalMerge
         $dirtyEdges = [];
 
         // (a) Everything the changed files own, in either build (covers modified + added + removed
-        //     elements whose owner is a changed file).
-        foreach ([$oldProv, $newProv] as $prov) {
+        //     elements whose owner is a changed file). Provenance indexes edges by id, so the ids
+        //     are translated to content identity here to stay in one key space with (b).
+        foreach ([[$oldProv, $old], [$newProv, $new]] as [$prov, $graph]) {
+            $keysById = self::edgeKeysById($graph);
             foreach ($prov->nodeIdsForFiles(...$changedFiles) as $id) {
                 $dirtyNodes[$id] = true;
             }
             foreach ($prov->edgeIdsForFiles(...$changedFiles) as $id) {
-                $dirtyEdges[$id] = true;
+                if (isset($keysById[$id])) {
+                    $dirtyEdges[$keysById[$id]] = true;
+                }
             }
         }
 
-        // (b) 1-hop closure over the edge delta. Edge ids are content-addressed (ID1), so an edge
-        //     whose id is present in exactly one build is an add or a remove; refresh the foreign
-        //     nodes it connects (the caller edit may own the edge but not its target node).
+        // (b) 1-hop closure over the edge delta. Edges are compared by content identity, so an
+        //     edge present in exactly one build is an add or a remove; refresh the foreign nodes
+        //     it connects (the caller edit may own the edge but not its target node).
         $oldEdges = self::edgeMap($old);
         $newEdges = self::edgeMap($new);
         foreach ([$oldEdges, $newEdges] as $edges) {
-            foreach ($edges as $id => $edge) {
-                $inOld = isset($oldEdges[$id]);
-                $inNew = isset($newEdges[$id]);
-                if ($inOld && $inNew) {
+            foreach ($edges as $key => $edge) {
+                if (isset($oldEdges[$key]) && isset($newEdges[$key])) {
                     continue; // unchanged edge
                 }
-                $dirtyEdges[$id] = true;
+                $dirtyEdges[$key] = true;
                 $dirtyNodes[$edge->source] = true;
                 $dirtyNodes[$edge->target] = true;
             }
@@ -97,9 +99,15 @@ final class IncrementalMerge
             );
         }
 
+        $seen = [];
         foreach ($new->edges() as $e) {
+            $key = self::edgeKey($e);
+            $n = $seen[$key] ?? 0;
+            $seen[$key] = $n + 1;
+            $key .= '#'.$n;
+
             $result->addEdge(
-                (! isset($dirty['edges'][$e->id]) && isset($oldEdges[$e->id])) ? $oldEdges[$e->id] : $e
+                (! isset($dirty['edges'][$key]) && isset($oldEdges[$key])) ? $oldEdges[$key] : $e
             );
         }
 
@@ -147,7 +155,7 @@ final class IncrementalMerge
                 $result->addNode($partialNodes[$n->id]);
             }
         }
-        // Edges are unchanged under the precondition — carry them all from $old (stable ids).
+        // Edges are unchanged under the precondition, so carry them all from $old.
         foreach ($old->edges() as $e) {
             $result->addEdge($e);
         }
@@ -156,19 +164,55 @@ final class IncrementalMerge
     }
 
     /**
-     * Edge ids owned by the given files within a graph — used by the orchestrator to verify the
-     * scoped rebuild's call graph matches the previous build (the applyPartial precondition).
+     * The call graph the given files own, as content identities — used by the orchestrator to
+     * verify a scoped rebuild matches the previous build (the applyPartial precondition).
+     *
+     * Occurrences are numbered within the owned set rather than across the whole graph, so the
+     * comparison isn't disturbed by duplicate edges elsewhere: the previous build is a full graph
+     * and the scoped one is not, and only the owned slice is being compared.
      *
      * @return array<string, true>
      */
-    public static function ownedEdgeIdSet(Graph $graph, array $files): array
+    public static function ownedEdgeKeySet(Graph $graph, array $files): array
     {
-        $set = [];
+        $owned = [];
         foreach (GraphProvenance::of($graph)->edgeIdsForFiles(...$files) as $id) {
-            $set[$id] = true;
+            $owned[$id] = true;
+        }
+
+        $set = [];
+        $seen = [];
+        foreach ($graph->edges() as $e) {
+            if (! isset($owned[$e->id])) {
+                continue;
+            }
+            $key = self::edgeKey($e);
+            $n = $seen[$key] ?? 0;
+            $seen[$key] = $n + 1;
+            $set[$key.'#'.$n] = true;
         }
 
         return $set;
+    }
+
+    /**
+     * Edge id => content identity, numbered in the same iteration order as {@see self::edgeMap()}
+     * so the two agree on which copy of a duplicated edge is which.
+     *
+     * @return array<string, string>
+     */
+    private static function edgeKeysById(Graph $graph): array
+    {
+        $out = [];
+        $seen = [];
+        foreach ($graph->edges() as $e) {
+            $key = self::edgeKey($e);
+            $n = $seen[$key] ?? 0;
+            $seen[$key] = $n + 1;
+            $out[$e->id] = $key.'#'.$n;
+        }
+
+        return $out;
     }
 
     /**
@@ -183,9 +227,11 @@ final class IncrementalMerge
         foreach ($graph->nodes() as $n) {
             $nodes[$n->id] = hash('xxh128', serialize([$n->type, $n->label, $n->data]));
         }
+        // Keyed by content identity, not by id: two builds of the same project must compare equal
+        // whether or not the id scheme numbers edges by build order.
         $edges = [];
-        foreach ($graph->edges() as $e) {
-            $edges[$e->id] = hash('xxh128', serialize([$e->source, $e->target, $e->label, $e->type]));
+        foreach (self::edgeMap($graph) as $key => $e) {
+            $edges[$key] = hash('xxh128', serialize([$e->source, $e->target, $e->label, $e->type]));
         }
         ksort($nodes);
         ksort($edges);
@@ -194,13 +240,38 @@ final class IncrementalMerge
     }
 
     /**
+     * An edge's identity for merge purposes: what the edge says, not what it is called.
+     *
+     * Deliberately derived from the edge's own fields rather than from `$e->id`. An id is only
+     * usable as an identity if it is stable across builds, and that is a property of whichever
+     * id scheme the graph happens to use — under a build-order counter, the same relationship
+     * gets a different id whenever anything upstream of it changes, and every comparison here
+     * would report the whole graph as changed. Computing identity from content keeps this layer
+     * correct under any id scheme.
+     *
+     * The graph deliberately keeps genuinely identical edges, so callers append a per-occurrence
+     * index to keep them distinct.
+     */
+    private static function edgeKey(Edge $e): string
+    {
+        return $e->source."\x1f".$e->target."\x1f".$e->type."\x1f".$e->label;
+    }
+
+    /**
+     * Edges by content identity. Identical edges are numbered in iteration order, so a graph
+     * holding N copies of one relationship yields N distinct keys in both builds.
+     *
      * @return array<string, Edge>
      */
     private static function edgeMap(Graph $graph): array
     {
         $map = [];
+        $seen = [];
         foreach ($graph->edges() as $e) {
-            $map[$e->id] = $e;
+            $key = self::edgeKey($e);
+            $n = $seen[$key] ?? 0;
+            $seen[$key] = $n + 1;
+            $map[$key.'#'.$n] = $e;
         }
 
         return $map;
