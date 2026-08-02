@@ -150,3 +150,59 @@ it('adds IoC binding edges from service providers to interfaces and implementati
         ->toBeInstanceOf(Edge::class)
         ->label->toContain('SqlThingRepository');
 });
+
+it('assigns content-addressed edge ids that are stable across rebuilds (graph format v2)', function () {
+    $build = function () {
+        $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+        $middlewareRegistry = new MiddlewareRegistry([], [], []);
+        $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
+        $traces = (new MethodTracer)->trace($controllers);
+        $modelFqcns = array_map(fn ($t) => $t->calleeFqcn, array_filter($traces, fn ($t) => $t->type === 'model'));
+        $models = (new ModelAnalyzer)->analyze(fixture('laravel-project'), $modelFqcns);
+
+        return (new GraphBuilder)->build('test', $routes, $middlewareRegistry, $controllers, $traces, $models);
+    };
+
+    $ids1 = array_map(fn ($e) => $e['id'], json_decode($build()->toJson(), true)['edges']);
+    $ids2 = array_map(fn ($e) => $e['id'], json_decode($build()->toJson(), true)['edges']);
+
+    // Deterministic across independent builds (the incremental-analyze prerequisite)...
+    expect($ids1)->toEqual($ids2);
+    // ...content-addressed (v2 format), never the old insertion-sequential "e{N}_" ids...
+    foreach ($ids1 as $id) {
+        expect($id)->toStartWith('e_');
+    }
+    // ...and unique (duplicate edges get a stable per-occurrence suffix, edge set preserved).
+    expect(count($ids1))->toBe(count(array_unique($ids1)));
+});
+
+it('keeps every existing edge id when a new edge appears', function () {
+    // The reason for content-addressed ids. Under the old insertion-counter scheme any edge
+    // added mid-build renumbered every edge after it, so a one-line code change rewrote most of
+    // the graph's ids — which is what made diffing two builds, or rebuilding part of one,
+    // impractical. A build that differs by one call must differ by one id.
+    $build = function (array $extraTraces = []) {
+        $routes = (new RouteAnalyzer)->analyze(fixture('laravel-project'));
+        $middlewareRegistry = new MiddlewareRegistry([], [], []);
+        $controllers = (new ControllerAnalyzer)->analyze(fixture('laravel-project'), $routes);
+        $traces = (new MethodTracer)->trace($controllers);
+        $modelFqcns = array_map(fn ($t) => $t->calleeFqcn, array_filter($traces, fn ($t) => $t->type === 'model'));
+        $models = (new ModelAnalyzer)->analyze(fixture('laravel-project'), $modelFqcns);
+
+        return (new GraphBuilder)->build(
+            'test', $routes, $middlewareRegistry, $controllers, [...$traces, ...$extraTraces], $models,
+        );
+    };
+
+    $before = array_map(fn ($e) => $e['id'], json_decode($build()->toJson(), true)['edges']);
+
+    // Repeat an existing call, the way an added line of code would: same endpoints, so the nodes
+    // are certain to exist and only the edge is new.
+    $traces = (new MethodTracer)->trace(
+        (new ControllerAnalyzer)->analyze(fixture('laravel-project'), (new RouteAnalyzer)->analyze(fixture('laravel-project'))),
+    );
+    $after = array_map(fn ($e) => $e['id'], json_decode($build([$traces[0]])->toJson(), true)['edges']);
+
+    expect(array_diff($before, $after))->toBe([])
+        ->and(count($after))->toBe(count($before) + 1);
+});

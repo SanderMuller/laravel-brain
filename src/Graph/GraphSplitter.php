@@ -435,6 +435,9 @@ class GraphSplitter
         $json = json_encode([
             'project' => $projectName,
             'analyzedAt' => $analyzedAt,
+            // Bumped to 2 when edge ids became content-addressed (stable across rebuilds) instead
+            // of insertion-sequential. Consumers that persisted v1 edge ids should invalidate once.
+            'graphFormatVersion' => 2,
             'totalRoutes' => $totalRoutes,
             'totalNodes' => $fullGraph->nodeCount(),
             'totalEdges' => $fullGraph->edgeCount(),

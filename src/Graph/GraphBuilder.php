@@ -38,7 +38,8 @@ class GraphBuilder
 {
     private Graph $graph;
 
-    private int $edgeCounter = 0;
+    /** @var array<string, int> content-key => times emitted, for stable duplicate-edge id suffixes */
+    private array $edgeIdOccurrence = [];
 
     private FlowExtractor $flowExtractor;
 
@@ -437,6 +438,7 @@ class GraphBuilder
         }
         $this->projectRoot = $projectRoot;
         $this->classMetrics = [];
+        $this->edgeIdOccurrence = [];
         $this->seenControllerExtendsEdges = [];
         $this->seenBindingWires = [];
         $this->bindingRegistry = $bindingRegistry;
@@ -1969,16 +1971,27 @@ class GraphBuilder
 
     private function addEdge(string $source, string $target, string $label, string $type): void
     {
-        $id = "e{$this->edgeCounter}_{$source}_{$target}";
-        if ($this->graph->hasEdge($id)) {
-            return;
-        }
         // Prevent edges to/from non-existent nodes (safety guard)
         if (! $this->graph->hasNode($source) || ! $this->graph->hasNode($target)) {
             return;
         }
+
+        // Content-addressed id (graph format v2): derived from the edge itself rather than an
+        // insertion counter, so an edge keeps its id as unrelated edges come and go. Identical
+        // edges, which the graph keeps on purpose, take a per-occurrence suffix.
+        $key = $source."\x1f".$target."\x1f".$type."\x1f".$label;
+        $occurrence = $this->edgeIdOccurrence[$key] ?? 0;
+        $hash = hash('xxh128', $key);
+
+        // Not "e2_": a v1 id read "e{N}_...", so that prefix already belonged to the third edge.
+        $id = 'e_'.($occurrence === 0 ? $hash : $hash.'_'.$occurrence);
+
+        if ($this->graph->hasEdge($id)) {
+            return;
+        }
+
         $this->graph->addEdge(new Edge($id, $source, $target, $label, $type));
-        $this->edgeCounter++;
+        $this->edgeIdOccurrence[$key] = $occurrence + 1;
     }
 
     // ── Console commands ──────────────────────────────────────────────────────
