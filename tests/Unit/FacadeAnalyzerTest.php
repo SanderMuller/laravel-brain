@@ -98,3 +98,34 @@ it('discovers a facade whose files open with declare(strict_types=1)', function 
         ->accessor->toBe('App\Support\SystemClock')
         ->concreteFqcn->toBe('App\Support\SystemClock');
 });
+
+it('still discovers a facade whose source spells the keyword EXTENDS', function () {
+    // Files with no `extends` keyword are skipped before parsing, since they cannot define a
+    // facade. PHP keywords are case-insensitive, so that test has to be too.
+    $root = sys_get_temp_dir().'/brain-facade-case-'.uniqid();
+    mkdir($root.'/app/Support', 0o777, true);
+
+    file_put_contents($root.'/app/Support/ShoutFacade.php', <<<'PHP'
+        <?php
+
+        namespace App\Support;
+
+        use Illuminate\Support\Facades\Facade;
+
+        class ShoutFacade EXTENDS Facade
+        {
+            protected static function getFacadeAccessor()
+            {
+                return 'shout';
+            }
+        }
+        PHP);
+
+    $registry = (new FacadeAnalyzer)->analyze($root);
+
+    expect($registry->get('App\Support\ShoutFacade'))
+        ->toBeInstanceOf(FacadeRecord::class)
+        ->accessor->toBe('shout');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
