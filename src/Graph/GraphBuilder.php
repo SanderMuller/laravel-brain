@@ -1512,6 +1512,63 @@ class GraphBuilder
         return $refs;
     }
 
+    /**
+     * Wire view → view "renders" edges from the composition map produced by
+     * BladeViewAnalyzer. To stay route-anchored, only views already reached from
+     * an action seed the walk; the tree is then descended transitively, so every
+     * nested component reachable from a rendered view is linked without adding
+     * orphan views that no route renders.
+     *
+     * @param  array<string, list<string>>  $childrenByParent  parent view name => child view names
+     */
+    public function addViewComposition(array $childrenByParent): void
+    {
+        $seen = [];
+        $queue = [];
+        foreach ($this->graph->nodes() as $node) {
+            if ($node->type === 'view' && isset($node->data['view'])) {
+                $dot = (string) $node->data['view'];
+                if (! isset($seen[$dot])) {
+                    $seen[$dot] = true;
+                    $queue[] = $dot;
+                }
+            }
+        }
+
+        while ($queue !== []) {
+            $parent = array_shift($queue);
+            $children = $childrenByParent[$parent] ?? [];
+            if ($children === []) {
+                continue;
+            }
+            $parentId = $this->ensureBladeViewNode($parent);
+            foreach ($children as $child) {
+                $childId = $this->ensureBladeViewNode($child);
+                $this->addEdge($parentId, $childId, 'renders', 'view-to-view');
+                if (! isset($seen[$child])) {
+                    $seen[$child] = true;
+                    $queue[] = $child;
+                }
+            }
+        }
+    }
+
+    private function ensureBladeViewNode(string $viewDot): string
+    {
+        $id = $this->viewNodeId(MethodTracer::BLADE_FQCN_PREFIX.$viewDot);
+        if (! $this->graph->hasNode($id)) {
+            $blade = $this->resolveBladePath($viewDot);
+            $refs = $blade !== null ? $this->parseBladeRefs($blade) : [];
+            $this->graph->addNode(new Node($id, 'view', $viewDot, [
+                'view' => $viewDot,
+                'file' => $blade ?? '',
+                'members' => $refs,
+            ]));
+        }
+
+        return $id;
+    }
+
     // ── Existing node adders ──────────────────────────────────────────────────
 
     private function addRouteNode(RouteDefinition $route, string $id): void
