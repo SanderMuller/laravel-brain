@@ -47,6 +47,12 @@ class ProjectAnalyzer
 
     private ListenerAnalyzer $listenerAnalyzer;
 
+    private ObserverAnalyzer $observerAnalyzer;
+
+    private PolicyAnalyzer $policyAnalyzer;
+
+    private BladeViewAnalyzer $bladeViewAnalyzer;
+
     private FilamentAnalyzer $filamentAnalyzer;
 
     private QueryTracer $queryTracer;
@@ -76,6 +82,20 @@ class ProjectAnalyzer
             is_array($listenerPaths) ? $listenerPaths : [],
             is_array($providerPaths) ? $providerPaths : [],
         );
+
+        $observerModelPaths = config('laravel-brain.observers.model_paths', ['app/Models']);
+        $observerProviderPaths = config('laravel-brain.observers.provider_paths', ['app/Providers']);
+        $this->observerAnalyzer = new ObserverAnalyzer(
+            is_array($observerModelPaths) ? $observerModelPaths : [],
+            is_array($observerProviderPaths) ? $observerProviderPaths : [],
+        );
+
+        $policyProviderPaths = config('laravel-brain.policies.provider_paths', ['app/Providers']);
+        $this->policyAnalyzer = new PolicyAnalyzer(
+            is_array($policyProviderPaths) ? $policyProviderPaths : [],
+        );
+
+        $this->bladeViewAnalyzer = new BladeViewAnalyzer;
 
         $cmdConfig = config('laravel-brain.commands', []);
         $this->consoleAnalyzer = new ConsoleAnalyzer(
@@ -117,6 +137,10 @@ class ProjectAnalyzer
         }
 
         $projectRoot = rtrim($projectRoot, '/');
+
+        // Rebuilt per analysis, so a rescan sees files added since the previous one.
+        ProjectFileIndex::clear();
+
         $appName = function_exists('config') ? config('app.name') : null;
         $projectName = (is_string($appName) && $appName !== '') ? $appName : 'Laravel Brain';
         $analyzedAt = date('c');
@@ -174,6 +198,15 @@ class ProjectAnalyzer
         $modelFqcns = array_unique(array_merge($modelFqcns, $this->modelAnalyzer->discoverModels($projectRoot)));
         $models = $this->modelAnalyzer->analyze($projectRoot, $modelFqcns);
         $this->emit('step:done', ['step' => 'models', 'count' => count($models), 'unit' => 'model', 'message' => '    Found '.count($models).' model(s)']);
+
+        $this->emit('step:start', ['step' => 'observers', 'label' => 'Scanning model observers', 'message' => '  → Scanning model observers...']);
+        $observerMap = $this->observerAnalyzer->analyze($projectRoot);
+        $observerCount = array_sum(array_map('count', $observerMap));
+        $this->emit('step:done', ['step' => 'observers', 'count' => $observerCount, 'unit' => 'observer', 'message' => '    Found '.$observerCount.' model-observer link(s)']);
+
+        $this->emit('step:start', ['step' => 'policies', 'label' => 'Resolving authorization policies', 'message' => '  → Resolving authorization policies...']);
+        $policyMap = $this->policyAnalyzer->analyze($projectRoot, $modelFqcns, $psr4Map);
+        $this->emit('step:done', ['step' => 'policies', 'count' => count($policyMap), 'unit' => 'policy', 'message' => '    Found '.count($policyMap).' model-policy link(s)']);
 
         $this->emit('step:start', ['step' => 'commands', 'label' => 'Scanning console commands', 'message' => '  → Scanning console commands...']);
         $consoleResult = $this->consoleAnalyzer->analyze($projectRoot);
@@ -265,6 +298,8 @@ class ProjectAnalyzer
         );
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);
+        $this->graphBuilder->addObservers($observerMap);
+        $this->graphBuilder->addPolicies($policyMap);
         if ($filamentResult['detected']) {
             $this->graphBuilder->addFilament(
                 $filamentResult['panels'],
@@ -283,6 +318,14 @@ class ProjectAnalyzer
                 $this->graphBuilder->addFilamentPageCallChain($filamentPageEdges, $pageNodeIds);
             }
         }
+
+        // Descend into view composition last, so every view node reached by a
+        // route, console, channel, or Filament entry point seeds the walk.
+        $this->emit('step:start', ['step' => 'views', 'label' => 'Mapping view composition', 'message' => '  → Mapping view composition...']);
+        $viewComposition = $this->bladeViewAnalyzer->analyze($projectRoot);
+        $this->graphBuilder->addViewComposition($viewComposition);
+        $this->emit('step:done', ['step' => 'views', 'count' => count($viewComposition), 'unit' => 'composed view', 'message' => '    Mapped '.count($viewComposition).' composing view(s)']);
+
         $this->emit('step:done', ['step' => 'graph', 'count' => $fullGraph->nodeCount(), 'unit' => 'node', 'extra' => $fullGraph->edgeCount().' edges', 'message' => "    {$fullGraph->nodeCount()} nodes, {$fullGraph->edgeCount()} edges"]);
 
         $this->emit('step:start', ['step' => 'split', 'label' => 'Splitting into tab subgraphs', 'message' => '  → Splitting into tab subgraphs...']);

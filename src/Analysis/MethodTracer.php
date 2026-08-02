@@ -8,6 +8,7 @@ use LaraMint\LaravelBrain\Parser\PhpExtendsFqcnResolver;
 use LaraMint\LaravelBrain\Parser\PhpFileParser;
 use PhpParser\Node;
 use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor;
 use PhpParser\NodeVisitorAbstract;
 
 /**
@@ -166,7 +167,7 @@ class MethodTracer
                 visibility: $hop['visibility'],
             );
 
-            if (in_array($hop['type'], ['service', 'repository', 'action', 'mail', 'notification', 'abstract_class'], true)) {
+            if (in_array($hop['type'], ['service', 'repository', 'action', 'mail', 'notification', 'abstract_class', 'resource'], true)) {
                 $subEdges = $this->traceDeep($hop['fqcn'], $hop['method'], depth: 1);
                 foreach ($subEdges as $sub) {
                     $edges[] = $sub;
@@ -236,7 +237,7 @@ class MethodTracer
                     );
 
                     // Recurse into non-leaf hops (services, repositories)
-                    if (in_array($hop['type'], ['service', 'repository', 'action', 'mail', 'notification', 'abstract_class'], true)) {
+                    if (in_array($hop['type'], ['service', 'repository', 'action', 'mail', 'notification', 'abstract_class', 'resource'], true)) {
                         $subEdges = $this->traceDeep(
                             $hop['fqcn'],
                             $hop['method'],
@@ -327,7 +328,7 @@ class MethodTracer
                 visibility: $hop['visibility'],
             );
 
-            if (in_array($hop['type'], ['service', 'repository', 'action', 'mail', 'notification', 'abstract_class'], true)) {
+            if (in_array($hop['type'], ['service', 'repository', 'action', 'mail', 'notification', 'abstract_class', 'resource'], true)) {
                 $subEdges = $this->traceDeep($hop['fqcn'], $hop['method'], $depth + 1);
                 foreach ($subEdges as $sub) {
                     $edges[] = $sub;
@@ -452,7 +453,9 @@ class MethodTracer
                     }
                     $fqcn = $this->parentFqcn;
                 } else {
-                    $fqcn = $this->useMap[$class] ?? $class;
+                    // The parser's resolved name follows imports and same-namespace
+                    // references the local useMap misses; fall back where it can't.
+                    $fqcn = PhpFileParser::resolvedName($node->class) ?? $this->useMap[$class] ?? $class;
                 }
 
                 // Job::dispatch()
@@ -534,6 +537,22 @@ class MethodTracer
                     }
 
                     return;
+                }
+
+                // API resources: UserResource::make($user) / UserResource::collection($users).
+                // Resources routinely compose sibling resources in the same namespace with no
+                // import, so an unqualified name is resolved against the current namespace.
+                if (in_array($method, ['make', 'collection'], true)) {
+                    $resourceFqcn = $this->qualifySibling($fqcn);
+                    // A recursive resource composing its own type (a tree of comments,
+                    // interactions, …) is a self-loop that adds no reach — skip it.
+                    if ($this->tracer->looksLikeResource($resourceFqcn)
+                        && ! $this->isFrameworkClass($resourceFqcn)
+                        && $resourceFqcn !== $this->currentFqcn) {
+                        $this->hops[] = ['fqcn' => $resourceFqcn, 'method' => 'toArray', 'type' => 'resource', 'visibility' => 'public'];
+
+                        return;
+                    }
                 }
 
                 // Eloquent static queries: User::find(), Order::create() …
@@ -695,7 +714,7 @@ class MethodTracer
                     return;
                 }
                 $class = $node->class->toString();
-                $fqcn = $this->useMap[$class] ?? $class;
+                $fqcn = PhpFileParser::resolvedName($node->class) ?? $this->useMap[$class] ?? $class;
 
                 if ($this->looksLikeJob($fqcn)) {
                     // Caught by dispatch() later; skip to avoid double-counting
@@ -716,6 +735,19 @@ class MethodTracer
                         'fqcn' => $fqcn,
                         'method' => 'via',
                         'type' => 'notification',
+                        'visibility' => 'public',
+                    ];
+
+                    return;
+                }
+                $resourceFqcn = $this->qualifySibling($fqcn);
+                if ($this->tracer->looksLikeResource($resourceFqcn)
+                    && ! $this->isFrameworkClass($resourceFqcn)
+                    && $resourceFqcn !== $this->currentFqcn) {
+                    $this->hops[] = [
+                        'fqcn' => $resourceFqcn,
+                        'method' => 'toArray',
+                        'type' => 'resource',
                         'visibility' => 'public',
                     ];
 
@@ -747,7 +779,7 @@ class MethodTracer
                 }
                 $varName = $node->var->name;
                 $class = $node->expr->class->toString();
-                $fqcn = $this->useMap[$class] ?? $class;
+                $fqcn = PhpFileParser::resolvedName($node->expr->class) ?? $this->useMap[$class] ?? $class;
 
                 if (! $this->looksLikeModel($fqcn) && ! $this->isFrameworkClass($fqcn) && str_contains($fqcn, '\\')) {
                     $this->varTypeMap[$varName] = $fqcn;
@@ -767,7 +799,7 @@ class MethodTracer
                 if (in_array($lower, ['self', 'static', 'parent'], true)) {
                     return;
                 }
-                $fqcn = $this->useMap[$short] ?? $short;
+                $fqcn = PhpFileParser::resolvedName($node->class) ?? $this->useMap[$short] ?? $short;
                 if (! str_contains($fqcn, '\\')) {
                     return;
                 }
@@ -936,6 +968,24 @@ class MethodTracer
                 return $classes;
             }
 
+            /**
+             * Qualify an unqualified class name against the namespace of the class
+             * currently being scanned. Names that are already qualified, or the
+             * self/static/parent keywords (already resolved to an FQCN upstream),
+             * are returned unchanged.
+             */
+            private function qualifySibling(string $fqcn): string
+            {
+                if (in_array(strtolower($fqcn), ['self', 'static', 'parent'], true)
+                    || str_contains($fqcn, '\\')
+                    || ! str_contains($this->currentFqcn, '\\')) {
+                    return $fqcn;
+                }
+                $pos = strrpos($this->currentFqcn, '\\');
+
+                return substr($this->currentFqcn, 0, $pos).'\\'.$fqcn;
+            }
+
             private function looksLikeModel(string $class): bool
             {
                 // Covers App\Models\, Modules\Blog\Models\, any \Models\ or \Model\ segment
@@ -1073,6 +1123,10 @@ class MethodTracer
                     }
 
                     $this->methods[$name] = $node;
+
+                    // Collecting signatures does not need the body, and not descending stops a
+                    // method of an anonymous class inside it from overwriting this one.
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
                 }
 
                 return null;
@@ -1159,24 +1213,7 @@ class MethodTracer
 
         $filename = $shortName.'.php';
 
-        foreach (['app', 'src'] as $dir) {
-            $base = $this->projectRoot.'/'.$dir;
-            if (! is_dir($base)) {
-                continue;
-            }
-
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->getFilename() === $filename) {
-                    return $file->getPathname();
-                }
-            }
-        }
-
-        return null;
+        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename);
     }
 
     private function fallbackEntryMethod(string $fqcn, string $requested, array $methods): string
@@ -1221,6 +1258,16 @@ class MethodTracer
     public function looksLikeNotification(string $class): bool
     {
         return str_contains($class, '\\Notifications\\');
+    }
+
+    /**
+     * An Eloquent API resource / resource collection. Recognised by the
+     * conventional `App\Http\Resources\` location where `make:resource` places
+     * them — precise enough not to collide with Filament's `\Filament\Resources\`.
+     */
+    public function looksLikeResource(string $class): bool
+    {
+        return str_contains($class, '\\Http\\Resources\\');
     }
 
     public function declKindIsEnum(string $fqcn): bool

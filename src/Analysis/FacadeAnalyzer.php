@@ -33,6 +33,8 @@ final class FacadeAnalyzer
 
     private string $appDir = '';
 
+    private string $projectRoot = '';
+
     /** @var array<string, array{ast: mixed, useMap: array<string,string>}|null> */
     private array $parseCache = [];
 
@@ -45,7 +47,8 @@ final class FacadeAnalyzer
     {
         $registry = new FacadeRegistry;
         $this->parseCache = [];
-        $this->appDir = rtrim($projectRoot, '/').'/app';
+        $this->projectRoot = rtrim($projectRoot, '/');
+        $this->appDir = $this->projectRoot.'/app';
 
         if (! is_dir($this->appDir)) {
             return $registry;
@@ -59,10 +62,27 @@ final class FacadeAnalyzer
             if ($file->getExtension() !== 'php') {
                 continue;
             }
+            if (! $this->mightDefineFacade($file->getPathname())) {
+                continue;
+            }
             $this->scanFile($file->getPathname(), $registry);
         }
 
         return $registry;
+    }
+
+    /**
+     * A facade reaches Facade through `extends`, so a file without the keyword cannot define
+     * one. Crude in the safe direction: `extends` in a comment or a string only costs a scan
+     * that would have happened anyway.
+     */
+    private function mightDefineFacade(string $file): bool
+    {
+        $code = @file_get_contents($file);
+
+        // stripos, not str_contains: PHP keywords are case-insensitive, and `class X EXTENDS Y`
+        // is valid source.
+        return $code !== false && stripos($code, 'extends') !== false;
     }
 
     private function scanFile(string $file, FacadeRegistry $registry): void
@@ -276,7 +296,7 @@ final class FacadeAnalyzer
      */
     private function findFileInAppDir(string $fqcn): ?string
     {
-        if ($this->appDir === '' || ! is_dir($this->appDir)) {
+        if ($this->projectRoot === '') {
             return null;
         }
 
@@ -284,17 +304,7 @@ final class FacadeAnalyzer
             ? substr($fqcn, strrpos($fqcn, '\\') + 1)
             : $fqcn;
 
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($this->appDir, \FilesystemIterator::SKIP_DOTS)
-        );
-
-        foreach ($iterator as $file) {
-            if ($file->getFilename() === $shortName.'.php') {
-                return $file->getPathname();
-            }
-        }
-
-        return null;
+        return ProjectFileIndex::findFile($this->projectRoot, ['app'], $shortName.'.php');
     }
 
     /**
@@ -322,8 +332,13 @@ final class FacadeAnalyzer
         if (! is_array($ast)) {
             return [];
         }
-        if (isset($ast[0]) && $ast[0] instanceof Namespace_) {
-            return $ast[0]->stmts;
+
+        // Find the namespace wherever it sits: a leading `declare(strict_types=1);` shifts it off
+        // index 0, which used to make every scan through here silently skip the whole file.
+        foreach ($ast as $stmt) {
+            if ($stmt instanceof Namespace_) {
+                return $stmt->stmts;
+            }
         }
 
         return $ast;

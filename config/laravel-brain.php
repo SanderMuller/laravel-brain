@@ -212,6 +212,45 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Model Observers
+    // -------------------------------------------------------------------------
+    // Model → observer edges are discovered from every registration form:
+    //   - attribute: a model under "model_paths" marked #[ObservedBy(...)];
+    //   - observe(): a Model::observe(Observer::class) call, whether made from a
+    //     provider under "provider_paths" or from the model's own booted()
+    //     via self::observe() / static::observe().
+    // So the graph shows which observer runs on a model's lifecycle events,
+    // however it is wired.
+    //
+    'observers' => [
+        'model_paths' => [
+            'app/Models',
+        ],
+        'provider_paths' => [
+            'app/Providers',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
+    // Authorization Policies
+    // -------------------------------------------------------------------------
+    // Model → policy edges are resolved the way Laravel's Gate resolves a
+    // policy, in precedence order:
+    //   - explicit: an AuthServiceProvider::$policies map or a
+    //     Gate::policy(Model::class, Policy::class) call in a provider under
+    //     "provider_paths";
+    //   - attribute: a model marked #[UsePolicy(Policy::class)];
+    //   - convention: the guessed App\Policies\FooPolicy for App\Models\Foo,
+    //     used only when that policy class exists.
+    // So the graph shows which policy authorizes each model.
+    //
+    'policies' => [
+        'provider_paths' => [
+            'app/Providers',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Command Entry Points
     // -------------------------------------------------------------------------
     // Laravel commands are registered through three distinct entry points.

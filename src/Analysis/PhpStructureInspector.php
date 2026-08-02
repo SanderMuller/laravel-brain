@@ -18,6 +18,13 @@ class PhpStructureInspector
 {
     private PhpFileParser $parser;
 
+    /**
+     * Per-file memo: GraphBuilder inspects the same file once per node it builds from it.
+     *
+     * @var array<string, array{kind: string, members: list<array<string, mixed>>}|null>
+     */
+    private array $inspectCache = [];
+
     public function __construct(?PhpFileParser $parser = null)
     {
         $this->parser = $parser ?? new PhpFileParser;
@@ -27,6 +34,18 @@ class PhpStructureInspector
      * @return array{kind: string, members: list<array<string, mixed>>}|null
      */
     public function inspectFile(string $file): ?array
+    {
+        if (array_key_exists($file, $this->inspectCache)) {
+            return $this->inspectCache[$file];
+        }
+
+        return $this->inspectCache[$file] = $this->inspectFileUncached($file);
+    }
+
+    /**
+     * @return array{kind: string, members: list<array<string, mixed>>}|null
+     */
+    private function inspectFileUncached(string $file): ?array
     {
         if (! is_file($file)) {
             return null;
