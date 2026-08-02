@@ -2,6 +2,7 @@
 
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
+use LaraMint\LaravelBrain\Graph\Edge;
 use LaraMint\LaravelBrain\Graph\Graph;
 use LaraMint\LaravelBrain\Graph\GraphSplitter;
 use LaraMint\LaravelBrain\Graph\Node;
@@ -137,4 +138,43 @@ it('emits issueCount and riskLevel in the manifest JSON only when there are issu
         ->and($tabs['POST /login']['riskLevel'])->toBe('medium')
         ->and($tabs['GET /ping'])->not->toHaveKey('issueCount')
         ->and($tabs['GET /ping'])->not->toHaveKey('riskLevel');
+});
+
+it('emits a subgraph in the full graph\'s node and edge order', function () {
+    // A tab's subgraph is a filtered view of the full graph, and the order it emits nodes and
+    // edges in is part of the file it produces. Reachability is discovered breadth-first, which
+    // is not the order the nodes were added in, so extraction has to restore the original one.
+    $graph = new Graph;
+    $graph->addNode(splitterRouteNode('GET', '/orders'));
+    foreach (['Zeta', 'Alpha', 'Mu'] as $name) {
+        $graph->addNode(new Node("action::App\\Http\\Controllers\\{$name}Controller::index", 'action', $name));
+    }
+    // An unreachable node in the middle, to prove filtering still happens.
+    $graph->addNode(new Node('action::App\\Http\\Controllers\\OtherController::index', 'action', 'Other'));
+
+    $edges = [
+        ['route::GET::/orders', 'action::App\\Http\\Controllers\\ZetaController::index'],
+        ['action::App\\Http\\Controllers\\ZetaController::index', 'action::App\\Http\\Controllers\\AlphaController::index'],
+        ['action::App\\Http\\Controllers\\AlphaController::index', 'action::App\\Http\\Controllers\\MuController::index'],
+    ];
+    foreach ($edges as $i => [$from, $to]) {
+        $graph->addEdge(new Edge("e{$i}", $from, $to, 'calls', 'flow'));
+    }
+
+    $split = (new GraphSplitter)->split(
+        $graph,
+        [splitterRoute('GET', '/orders', '/app/routes/web.php')],
+        [], [], [],
+        'proj',
+        '2026-05-16T00:00:00Z',
+    );
+
+    $sub = $split['subgraphs'][array_key_first($split['subgraphs'])];
+
+    $fullOrder = array_map(fn ($n) => $n->id, $graph->nodes());
+    $subOrder = array_map(fn ($n) => $n->id, $sub->nodes());
+
+    expect($subOrder)->toBe(array_values(array_filter($fullOrder, fn ($id) => in_array($id, $subOrder, true))))
+        ->and($subOrder)->not->toContain('action::App\Http\Controllers\OtherController::index')
+        ->and(array_map(fn ($e) => $e->id, $sub->edges()))->toBe(['e0', 'e1', 'e2']);
 });

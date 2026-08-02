@@ -8,6 +8,7 @@ use LaraMint\LaravelBrain\Parser\PhpExtendsFqcnResolver;
 use LaraMint\LaravelBrain\Parser\PhpFileParser;
 use PhpParser\Node;
 use PhpParser\NodeTraverser;
+use PhpParser\NodeVisitor;
 use PhpParser\NodeVisitorAbstract;
 
 /**
@@ -1122,6 +1123,10 @@ class MethodTracer
                     }
 
                     $this->methods[$name] = $node;
+
+                    // Collecting signatures does not need the body, and not descending stops a
+                    // method of an anonymous class inside it from overwriting this one.
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
                 }
 
                 return null;
@@ -1208,24 +1213,7 @@ class MethodTracer
 
         $filename = $shortName.'.php';
 
-        foreach (['app', 'src'] as $dir) {
-            $base = $this->projectRoot.'/'.$dir;
-            if (! is_dir($base)) {
-                continue;
-            }
-
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->getFilename() === $filename) {
-                    return $file->getPathname();
-                }
-            }
-        }
-
-        return null;
+        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename);
     }
 
     private function fallbackEntryMethod(string $fqcn, string $requested, array $methods): string

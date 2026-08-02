@@ -23,6 +23,7 @@ use LaraMint\LaravelBrain\Analysis\MethodTracer;
 use LaraMint\LaravelBrain\Analysis\MiddlewareRegistry;
 use LaraMint\LaravelBrain\Analysis\ModelDefinition;
 use LaraMint\LaravelBrain\Analysis\PhpStructureInspector;
+use LaraMint\LaravelBrain\Analysis\ProjectFileIndex;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 use LaraMint\LaravelBrain\Analysis\ScheduleEntry;
 use LaraMint\LaravelBrain\Analysis\ValidationRulesExtractor;
@@ -45,14 +46,22 @@ class GraphBuilder
 
     private array $psr4Map = [];
 
-    /**
-     * Maximum number of parsed file ASTs to keep in memory at once.
-     * Oldest entries are evicted when the limit is reached to prevent OOM on large codebases.
-     */
-    private const PARSE_CACHE_MAX = 200;
+    /** @var array<string, string> FQCN => resolved path ('' when unresolvable), per build */
+    private array $resolveFileMemo = [];
 
-    /** @var array<string, array> file path => parsed result cache (bounded, insertion-ordered) */
-    private array $parseCache = [];
+    /**
+     * Per-file method map, use map and resolved parent — see fileClassInfo().
+     *
+     * @var array<string, array{methods: array<string, PhpNode\Stmt\ClassMethod>, useMap: array<string,string>, parent: ?string}|null>
+     */
+    private array $fileClassInfo = [];
+
+    /**
+     * Memoized findMethodNodeInChain() results, keyed by "fqcn\0method".
+     *
+     * @var array<string, array{methodNode: PhpNode\Stmt\ClassMethod, useMap: array<string,string>, file: string, declaringFqcn: string}|null>
+     */
+    private array $methodNodeMemo = [];
 
     /**
      * Accumulator for fat-class detection.
@@ -149,8 +158,16 @@ class GraphBuilder
 
     /**
      * Resolve an FQCN to an absolute file path using the PSR-4 map.
+     *
+     * Memoized for the build: the answer depends only on the FQCN, the PSR-4 map and the
+     * project root, all fixed once buildGraph() starts.
      */
     private function resolveFile(string $fqcn): string
+    {
+        return $this->resolveFileMemo[$fqcn] ??= $this->resolveFileUncached($fqcn);
+    }
+
+    private function resolveFileUncached(string $fqcn): string
     {
         // Livewire v2 namespace::dot.notation (e.g. 'pages::password.create')
         if (str_contains($fqcn, '::') && ! str_contains($fqcn, '\\')) {
@@ -196,24 +213,7 @@ class GraphBuilder
 
         $filename = $shortName.'.php';
 
-        foreach (['app', 'src'] as $dir) {
-            $base = $this->projectRoot.'/'.$dir;
-            if (! is_dir($base)) {
-                continue;
-            }
-
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->getFilename() === $filename) {
-                    return $file->getPathname();
-                }
-            }
-        }
-
-        return '';
+        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename) ?? '';
     }
 
     /**
@@ -282,63 +282,48 @@ class GraphBuilder
             return null;
         }
 
+        // Entry calls only: a nested call has already spent part of the five-hop budget, so its
+        // result is not the answer to the same question.
+        $memoKey = $fqcn."\0".$method;
+        if ($depth === 0 && array_key_exists($memoKey, $this->methodNodeMemo)) {
+            return $this->methodNodeMemo[$memoKey];
+        }
+
+        $found = $this->findMethodNodeInChainUncached($fqcn, $method, $depth);
+
+        if ($depth === 0) {
+            $this->methodNodeMemo[$memoKey] = $found;
+        }
+
+        return $found;
+    }
+
+    /**
+     * @return array{methodNode: PhpNode\Stmt\ClassMethod, useMap: array<string,string>, file: string, declaringFqcn: string}|null
+     */
+    private function findMethodNodeInChainUncached(string $fqcn, string $method, int $depth): ?array
+    {
         $file = $this->resolveFile($fqcn);
         if ($file === '') {
             return null;
         }
 
-        if (! isset($this->parseCache[$file])) {
-            if (count($this->parseCache) >= self::PARSE_CACHE_MAX) {
-                // Evict the oldest quarter of entries to avoid repeated single evictions
-                $evictCount = (int) (self::PARSE_CACHE_MAX / 4);
-                foreach (array_keys($this->parseCache) as $k) {
-                    unset($this->parseCache[$k]);
-                    if (--$evictCount <= 0) {
-                        break;
-                    }
-                }
-            }
-            $this->parseCache[$file] = $this->parser->parse($file);
-        }
-        $parsed = $this->parseCache[$file];
-        if (! $parsed || ! $parsed['ast']) {
+        $info = $this->fileClassInfo($file);
+        if ($info === null) {
             return null;
         }
 
-        $traverser = new NodeTraverser;
-        $finder = new class($method) extends NodeVisitorAbstract
-        {
-            public ?PhpNode\Stmt\ClassMethod $found = null;
-
-            public function __construct(private string $target) {}
-
-            public function enterNode(PhpNode $node): ?int
-            {
-                if ($node instanceof PhpNode\Stmt\ClassMethod
-                    && $node->name->toString() === $this->target) {
-                    $this->found = $node;
-
-                    return NodeVisitor::STOP_TRAVERSAL;
-                }
-
-                return null;
-            }
-        };
-        $traverser->addVisitor($finder);
-        $traverser->traverse($parsed['ast']);
-
-        if ($finder->found !== null) {
+        if (isset($info['methods'][$method])) {
             return [
-                'methodNode' => $finder->found,
-                'useMap' => $parsed['useMap'] ?? [],
+                'methodNode' => $info['methods'][$method],
+                'useMap' => $info['useMap'],
                 'file' => $file,
                 'declaringFqcn' => $fqcn,
             ];
         }
 
         // Method not in this class — walk up to the parent if it is an app class.
-        $ns = PhpExtendsFqcnResolver::namespaceFromAst($parsed['ast']);
-        $parentFqcn = $this->extractExtendsFromAst($parsed['ast'], $ns, $parsed['useMap'] ?? []);
+        $parentFqcn = $info['parent'];
         if (
             $parentFqcn !== null
             && ! str_starts_with($parentFqcn, 'Illuminate\\')
@@ -348,6 +333,55 @@ class GraphBuilder
         }
 
         return null;
+    }
+
+    /**
+     * Everything the chain walk needs from one file, collected in a single traversal and kept
+     * for the build: its methods by name, its use map, and its resolved parent FQCN. The
+     * traversal does not descend into method bodies.
+     *
+     * @return array{methods: array<string, PhpNode\Stmt\ClassMethod>, useMap: array<string,string>, parent: ?string}|null
+     */
+    private function fileClassInfo(string $file): ?array
+    {
+        if (array_key_exists($file, $this->fileClassInfo)) {
+            return $this->fileClassInfo[$file];
+        }
+
+        $parsed = $this->parser->parse($file);
+        if (! $parsed['ast']) {
+            return $this->fileClassInfo[$file] = null;
+        }
+
+        $traverser = new NodeTraverser;
+        $collector = new class extends NodeVisitorAbstract
+        {
+            /** @var array<string, PhpNode\Stmt\ClassMethod> */
+            public array $methods = [];
+
+            public function enterNode(PhpNode $node): ?int
+            {
+                if ($node instanceof PhpNode\Stmt\ClassMethod) {
+                    // First declaration wins, as with the previous stop-at-first-match.
+                    $this->methods[$node->name->toString()] ??= $node;
+
+                    // The node keeps its body for later use; collecting names does not need it.
+                    return NodeVisitor::DONT_TRAVERSE_CHILDREN;
+                }
+
+                return null;
+            }
+        };
+        $traverser->addVisitor($collector);
+        $traverser->traverse($parsed['ast']);
+
+        $ns = PhpExtendsFqcnResolver::namespaceFromAst($parsed['ast']);
+
+        return $this->fileClassInfo[$file] = [
+            'methods' => $collector->methods,
+            'useMap' => $parsed['useMap'] ?? [],
+            'parent' => $this->extractExtendsFromAst($parsed['ast'], $ns, $parsed['useMap'] ?? []),
+        ];
     }
 
     /**
@@ -1730,57 +1764,22 @@ class GraphBuilder
 
     private function extractVisibility(string $fqcn, string $method): string
     {
-        $file = $this->resolveFile($fqcn);
-        if ($file === '' || ! file_exists($file)) {
+        // The declaringFqcn check keeps the original semantics: only a method declared in
+        // $fqcn's own file has a visibility here; an inherited one reports 'public'.
+        $found = $this->findMethodNodeInChain($fqcn, $method);
+        if ($found === null || $found['declaringFqcn'] !== $fqcn) {
             return 'public';
         }
 
-        if (! isset($this->parseCache[$file])) {
-            if (count($this->parseCache) >= self::PARSE_CACHE_MAX) {
-                $evictCount = (int) (self::PARSE_CACHE_MAX / 4);
-                foreach (array_keys($this->parseCache) as $k) {
-                    unset($this->parseCache[$k]);
-                    if (--$evictCount <= 0) {
-                        break;
-                    }
-                }
-            }
-            $this->parseCache[$file] = $this->parser->parse($file);
+        $node = $found['methodNode'];
+        if ($node->isPrivate()) {
+            return 'private';
         }
-        $parsed = $this->parseCache[$file];
-        if (! $parsed || ! $parsed['ast']) {
-            return 'public';
+        if ($node->isProtected()) {
+            return 'protected';
         }
 
-        $traverser = new NodeTraverser;
-        $finder = new class($method) extends NodeVisitorAbstract
-        {
-            public string $visibility = 'public';
-
-            public function __construct(private string $target) {}
-
-            public function enterNode(PhpNode $node): ?int
-            {
-                if ($node instanceof PhpNode\Stmt\ClassMethod
-                    && $node->name->toString() === $this->target) {
-                    if ($node->isPrivate()) {
-                        $this->visibility = 'private';
-                    } elseif ($node->isProtected()) {
-                        $this->visibility = 'protected';
-                    } else {
-                        $this->visibility = 'public';
-                    }
-
-                    return NodeVisitor::STOP_TRAVERSAL;
-                }
-
-                return null;
-            }
-        };
-        $traverser->addVisitor($finder);
-        $traverser->traverse($parsed['ast']);
-
-        return $finder->visibility;
+        return 'public';
     }
 
     private function hasN1InSteps(array $steps): bool
@@ -1911,6 +1910,43 @@ class GraphBuilder
         }
 
         return $this->getStructureInspector()->listClassMethods($file);
+    }
+
+    /**
+     * Wire model → policy edges discovered by PolicyAnalyzer. The edge shares
+     * the canonical model node (model::FQCN), so a model's authorization policy
+     * sits alongside its fired-event and relationship edges.
+     *
+     * @param  array<string, string>  $policyMap  model FQCN => policy FQCN
+     */
+    public function addPolicies(array $policyMap): void
+    {
+        foreach ($policyMap as $modelFqcn => $policyFqcn) {
+            $modelId = $this->modelId($modelFqcn);
+            if (! $this->graph->hasNode($modelId)) {
+                $this->addModelNode($modelFqcn, null, $modelId);
+            }
+            $policyId = $this->policyId($policyFqcn);
+            $this->addPolicyNode($policyFqcn, $policyId);
+            $this->addEdge($modelId, $policyId, 'authorized by', 'model-to-policy');
+        }
+    }
+
+    private function addPolicyNode(string $fqcn, string $id): void
+    {
+        if ($this->graph->hasNode($id)) {
+            return;
+        }
+        $short = class_basename($fqcn);
+        $file = $this->resolveFile($fqcn);
+        $members = ($file !== '' && is_file($file))
+            ? $this->getStructureInspector()->listClassMethods($file)
+            : [];
+        $this->graph->addNode(new Node($id, 'policy', $short, [
+            'fqcn' => $fqcn,
+            'file' => $file,
+            'members' => $members,
+        ]));
     }
 
     // ── Helpers ───────────────────────────────────────────────────────────────
@@ -2162,6 +2198,11 @@ class GraphBuilder
     private function observerId(string $fqcn): string
     {
         return "observer::{$fqcn}";
+    }
+
+    private function policyId(string $fqcn): string
+    {
+        return "policy::{$fqcn}";
     }
 
     private function filamentPanelId(string $fqcn): string

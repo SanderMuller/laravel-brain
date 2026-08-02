@@ -49,6 +49,8 @@ class ProjectAnalyzer
 
     private ObserverAnalyzer $observerAnalyzer;
 
+    private PolicyAnalyzer $policyAnalyzer;
+
     private BladeViewAnalyzer $bladeViewAnalyzer;
 
     private FilamentAnalyzer $filamentAnalyzer;
@@ -86,6 +88,11 @@ class ProjectAnalyzer
         $this->observerAnalyzer = new ObserverAnalyzer(
             is_array($observerModelPaths) ? $observerModelPaths : [],
             is_array($observerProviderPaths) ? $observerProviderPaths : [],
+        );
+
+        $policyProviderPaths = config('laravel-brain.policies.provider_paths', ['app/Providers']);
+        $this->policyAnalyzer = new PolicyAnalyzer(
+            is_array($policyProviderPaths) ? $policyProviderPaths : [],
         );
 
         $this->bladeViewAnalyzer = new BladeViewAnalyzer;
@@ -130,6 +137,10 @@ class ProjectAnalyzer
         }
 
         $projectRoot = rtrim($projectRoot, '/');
+
+        // Rebuilt per analysis, so a rescan sees files added since the previous one.
+        ProjectFileIndex::clear();
+
         $appName = function_exists('config') ? config('app.name') : null;
         $projectName = (is_string($appName) && $appName !== '') ? $appName : 'Laravel Brain';
         $analyzedAt = date('c');
@@ -192,6 +203,10 @@ class ProjectAnalyzer
         $observerMap = $this->observerAnalyzer->analyze($projectRoot);
         $observerCount = array_sum(array_map('count', $observerMap));
         $this->emit('step:done', ['step' => 'observers', 'count' => $observerCount, 'unit' => 'observer', 'message' => '    Found '.$observerCount.' model-observer link(s)']);
+
+        $this->emit('step:start', ['step' => 'policies', 'label' => 'Resolving authorization policies', 'message' => '  → Resolving authorization policies...']);
+        $policyMap = $this->policyAnalyzer->analyze($projectRoot, $modelFqcns, $psr4Map);
+        $this->emit('step:done', ['step' => 'policies', 'count' => count($policyMap), 'unit' => 'policy', 'message' => '    Found '.count($policyMap).' model-policy link(s)']);
 
         $this->emit('step:start', ['step' => 'commands', 'label' => 'Scanning console commands', 'message' => '  → Scanning console commands...']);
         $consoleResult = $this->consoleAnalyzer->analyze($projectRoot);
@@ -284,6 +299,7 @@ class ProjectAnalyzer
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);
         $this->graphBuilder->addObservers($observerMap);
+        $this->graphBuilder->addPolicies($policyMap);
         if ($filamentResult['detected']) {
             $this->graphBuilder->addFilament(
                 $filamentResult['panels'],

@@ -77,6 +77,7 @@ class GraphSplitter
         //    does NOT fan out to ALL sibling actions.
         // 2. Bidirectional (for the "all" tab only, kept for reference)
         $fwdAdj = $this->buildForwardAdjacency($fullGraph);
+        $this->buildExtractionIndexes($fullGraph);
 
         $subgraphs = [];
         $manifest = [];
@@ -539,6 +540,31 @@ class GraphSplitter
         return $adj;
     }
 
+    /**
+     * Position-indexed views of the full graph, built once per split(). Extracting a tab's
+     * subgraph used to rescan EVERY node and edge of the full graph per tab — O(tabs × (N+E)),
+     * quadratic in app size since both factors grow with it (the scale-8 sweep measured
+     * exponent 1.93, with split the largest analyze phase). With these indexes each tab only
+     * touches its own BFS-reachable set; original insertion order is restored from the stored
+     * positions so the emitted subgraph JSON is byte-identical.
+     */
+    private array $nodePositions = [];
+
+    /** @var array<string, list<array{int, Edge}>> source id → [original position, edge] */
+    private array $edgesBySource = [];
+
+    private function buildExtractionIndexes(Graph $fullGraph): void
+    {
+        $this->nodePositions = [];
+        foreach ($fullGraph->nodes() as $i => $node) {
+            $this->nodePositions[$node->id] = $i;
+        }
+        $this->edgesBySource = [];
+        foreach ($fullGraph->edges() as $i => $edge) {
+            $this->edgesBySource[$edge->source][] = [$i, $edge];
+        }
+    }
+
     private function extractSubgraphForward(
         Graph $fullGraph,
         array $fwdAdj,
@@ -551,15 +577,26 @@ class GraphSplitter
         $sub = new Graph;
         $sub->setMeta(['project' => $projectName, 'analyzedAt' => $analyzedAt]);
 
-        foreach ($fullGraph->nodes() as $node) {
-            if (isset($reachable[$node->id])) {
-                $sub->addNode($node);
+        $nodePositions = [];
+        $edgesByPosition = [];
+        foreach ($reachable as $id => $_) {
+            if (isset($this->nodePositions[$id])) {
+                $nodePositions[$this->nodePositions[$id]] = $id;
+            }
+            foreach ($this->edgesBySource[$id] ?? [] as [$pos, $edge]) {
+                if (isset($reachable[$edge->target])) {
+                    $edgesByPosition[$pos] = $edge;
+                }
             }
         }
-        foreach ($fullGraph->edges() as $edge) {
-            if (isset($reachable[$edge->source]) && isset($reachable[$edge->target])) {
-                $sub->addEdge($edge);
-            }
+
+        ksort($nodePositions);
+        foreach ($nodePositions as $id) {
+            $sub->addNode($fullGraph->getNode($id));
+        }
+        ksort($edgesByPosition);
+        foreach ($edgesByPosition as $edge) {
+            $sub->addEdge($edge);
         }
 
         return $sub;

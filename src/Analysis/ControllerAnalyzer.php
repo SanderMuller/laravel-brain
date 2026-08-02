@@ -616,23 +616,6 @@ class ControllerAnalyzer
             $searchDirs[] = 'Modules';
         }
 
-        foreach ($searchDirs as $dir) {
-            $base = $projectRoot.'/'.$dir;
-            if (! is_dir($base)) {
-                continue;
-            }
-
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($base, \FilesystemIterator::SKIP_DOTS)
-            );
-
-            foreach ($iterator as $file) {
-                if ($file->getFilename() === $filename) {
-                    return $file->getPathname();
-                }
-            }
-        }
-
-        return null;
+        return ProjectFileIndex::findFile($projectRoot, $searchDirs, $filename);
     }
 }
