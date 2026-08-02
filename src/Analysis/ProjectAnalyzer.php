@@ -49,6 +49,8 @@ class ProjectAnalyzer
 
     private ObserverAnalyzer $observerAnalyzer;
 
+    private PolicyAnalyzer $policyAnalyzer;
+
     private FilamentAnalyzer $filamentAnalyzer;
 
     private QueryTracer $queryTracer;
@@ -84,6 +86,11 @@ class ProjectAnalyzer
         $this->observerAnalyzer = new ObserverAnalyzer(
             is_array($observerModelPaths) ? $observerModelPaths : [],
             is_array($observerProviderPaths) ? $observerProviderPaths : [],
+        );
+
+        $policyProviderPaths = config('laravel-brain.policies.provider_paths', ['app/Providers']);
+        $this->policyAnalyzer = new PolicyAnalyzer(
+            is_array($policyProviderPaths) ? $policyProviderPaths : [],
         );
 
         $cmdConfig = config('laravel-brain.commands', []);
@@ -189,6 +196,10 @@ class ProjectAnalyzer
         $observerCount = array_sum(array_map('count', $observerMap));
         $this->emit('step:done', ['step' => 'observers', 'count' => $observerCount, 'unit' => 'observer', 'message' => '    Found '.$observerCount.' model-observer link(s)']);
 
+        $this->emit('step:start', ['step' => 'policies', 'label' => 'Resolving authorization policies', 'message' => '  → Resolving authorization policies...']);
+        $policyMap = $this->policyAnalyzer->analyze($projectRoot, $modelFqcns, $psr4Map);
+        $this->emit('step:done', ['step' => 'policies', 'count' => count($policyMap), 'unit' => 'policy', 'message' => '    Found '.count($policyMap).' model-policy link(s)']);
+
         $this->emit('step:start', ['step' => 'commands', 'label' => 'Scanning console commands', 'message' => '  → Scanning console commands...']);
         $consoleResult = $this->consoleAnalyzer->analyze($projectRoot);
         $commands = $consoleResult['commands'];
@@ -280,6 +291,7 @@ class ProjectAnalyzer
         $this->graphBuilder->addConsoleCommands($commands, $schedules, $commandEdges);
         $this->graphBuilder->addChannels($channels, $channelEdges);
         $this->graphBuilder->addObservers($observerMap);
+        $this->graphBuilder->addPolicies($policyMap);
         if ($filamentResult['detected']) {
             $this->graphBuilder->addFilament(
                 $filamentResult['panels'],
