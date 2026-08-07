@@ -463,3 +463,40 @@ function routeAnalyzerTestDeleteTree(string $dir): void
     }
     @rmdir($dir);
 }
+
+it('resolves a controller named in a namespaced routes file without an import', function () {
+    // A routes file may declare a namespace, and a controller in that namespace then needs no
+    // `use`. Resolving through the import map alone left the controller short, which keys every
+    // route and call-chain edge that touches it on a name nothing else in the graph uses.
+    $root = sys_get_temp_dir().'/brain-routens-'.uniqid();
+    mkdir($root.'/routes', 0o777, true);
+    mkdir($root.'/app/Http/Controllers/Dev', 0o777, true);
+
+    file_put_contents($root.'/routes/web.php', <<<'PHP'
+        <?php
+
+        namespace App\Http\Controllers\Dev;
+
+        use Illuminate\Support\Facades\Route;
+
+        Route::get('dev', DevOverviewController::class);
+        PHP);
+    file_put_contents($root.'/app/Http/Controllers/Dev/DevOverviewController.php', <<<'PHP'
+        <?php
+
+        namespace App\Http\Controllers\Dev;
+
+        class DevOverviewController
+        {
+            public function __invoke() {}
+        }
+        PHP);
+
+    $routes = (new RouteAnalyzer)->analyze($root);
+    $dev = findRoute($routes, fn ($r) => str_contains($r->uri, 'dev'));
+
+    expect($dev)->not->toBeNull()
+        ->and($dev->controller)->toBe('App\Http\Controllers\Dev\DevOverviewController');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
