@@ -111,3 +111,26 @@ it('reconstructs correctly for a method-body edit that changes only the caller n
 
     rmrfDir($dir);
 });
+
+it('keeps the node order a full rebuild would produce, not just the same nodes', function () {
+    // signature() normalises order, so it cannot see this: applyPartial used to add the
+    // untouched nodes first and the rebuilt ones afterwards, which moved every rebuilt node to
+    // the end. The graph held the right nodes in the wrong sequence, and anything diffing or
+    // caching the output saw churn on every incremental tick.
+    $dir = sys_get_temp_dir().'/brain-merge-'.bin2hex(random_bytes(6));
+    $controllerFile = $dir.'/app/Http/Controllers/DemoController.php';
+
+    writeMergeProject($dir, '        $this->svc->run();');
+    $old = buildMergeGraph($dir);
+
+    writeMergeProject($dir, "        \$x = 1 + 1;\n        \$this->svc->run();");
+    $rebuilt = buildMergeGraph($dir);
+
+    $merged = IncrementalMerge::applyPartial($old, $rebuilt, [$controllerFile]);
+
+    $ids = fn ($graph) => array_map(fn ($n) => $n->id, $graph->nodes());
+
+    expect($ids($merged))->toBe($ids($rebuilt));
+
+    rmrfDir($dir);
+});

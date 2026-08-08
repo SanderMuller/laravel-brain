@@ -143,15 +143,15 @@ final class IncrementalMerge
         }
 
         $result = new Graph;
-        // Reused, untouched nodes from the previous build...
+        // One pass, in the previous build's order: an untouched node is carried over, and a
+        // changed file's node is substituted in place by its freshly rebuilt self. Rebuilding
+        // them in a second pass would move every one to the end, leaving a merged graph holding
+        // the same nodes as a rebuild in a different sequence — which anything diffing or
+        // caching the output would see as churn.
         foreach ($old->nodes() as $n) {
             if (! isset($dirtyNodes[$n->id])) {
                 $result->addNode($n);
-            }
-        }
-        // ...and the changed files' own nodes, freshly rebuilt.
-        foreach ($old->nodes() as $n) {
-            if (isset($dirtyNodes[$n->id]) && isset($partialNodes[$n->id])) {
+            } elseif (isset($partialNodes[$n->id])) {
                 $result->addNode($partialNodes[$n->id]);
             }
         }
