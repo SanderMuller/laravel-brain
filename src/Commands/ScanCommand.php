@@ -66,7 +66,7 @@ class ScanCommand extends Command
                 $this->newLine();
                 $this->line('  <fg=yellow>⚡ Changed:</> '.$this->summariseChanged($changed));
 
-                $scope = $this->scopeForRescan($mtimes, $current);
+                $scope = $this->scopeForRescan($projectPath, $mtimes, $current);
                 $started = microtime(true);
                 try {
                     $this->runScan($projectPath, verbose: false, scopeToFiles: $scope);
@@ -122,7 +122,7 @@ class ScanCommand extends Command
      * @param  array<string, int>  $new
      * @return string[]|null
      */
-    private function scopeForRescan(array $old, array $new): ?array
+    private function scopeForRescan(string $projectPath, array $old, array $new): ?array
     {
         if (count($old) !== count($new) || array_diff_key($old, $new) !== [] || array_diff_key($new, $old) !== []) {
             return null;
@@ -133,7 +133,10 @@ class ScanCommand extends Command
             if ($old[$path] === $mtime) {
                 continue;
             }
-            if (! str_contains($path, '/app/')) {
+            // Anchored at the project root: a substring test calls every file "in app/" when
+            // the project itself lives under a directory of that name, which would let a routes
+            // change take the scoped path and leave watch showing the previous graph.
+            if (! str_starts_with($path, rtrim($projectPath, '/').'/app/')) {
                 return null;
             }
             $modified[] = $path;

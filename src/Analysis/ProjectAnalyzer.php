@@ -147,8 +147,9 @@ class ProjectAnalyzer
      * every controller in the project, which is nearly all of the rest.
      *
      * The caller owns the decision to use this: it is only sound when no file was added or
-     * deleted and nothing outside `app/` moved, which is what {@see IncrementalAnalyzer}
-     * checks before it calls.
+     * deleted and nothing outside `app/` moved. Whether the changed files' own call graph
+     * survived the edit is not knowable up front, so that part is checked here and raises
+     * {@see ScopedRebuildNotApplicable} when it does not hold.
      *
      * @param  string[]  $changedFiles
      */
@@ -177,6 +178,13 @@ class ProjectAnalyzer
 
         $this->emit('project:start', ['name' => $projectName, 'message' => "Analyzing project: {$projectName}"]);
 
+        // Consumed for this run only: leaving it set would silently scope the next analyze() on
+        // a reused instance, and merge it into a graph that has since gone stale.
+        $scopeToFiles = $this->scopeToFiles;
+        $mergeInto = $this->mergeInto;
+        $this->scopeToFiles = null;
+        $this->mergeInto = null;
+
         $this->emit('step:start', ['step' => 'routes', 'label' => 'Scanning routes', 'message' => '  → Scanning routes...']);
         $routes = $this->routeAnalyzer->analyze($projectRoot);
         $this->emit('step:done', ['step' => 'routes', 'count' => count($routes), 'unit' => 'route', 'message' => '    Found '.count($routes).' route(s)']);
@@ -189,8 +197,8 @@ class ProjectAnalyzer
         $controllers = $this->controllerAnalyzer->analyze($projectRoot, $routes);
 
         // A scoped run traces only the controllers declared in the changed files.
-        if ($this->scopeToFiles !== null) {
-            $wanted = array_flip(array_map(static fn (string $f): string => realpath($f) ?: $f, $this->scopeToFiles));
+        if ($scopeToFiles !== null) {
+            $wanted = array_flip(array_map(static fn (string $f): string => realpath($f) ?: $f, $scopeToFiles));
             $controllers = array_filter(
                 $controllers,
                 static fn (ControllerDefinition $c): bool => isset($wanted[realpath($c->file) ?: $c->file]),
@@ -373,13 +381,13 @@ class ProjectAnalyzer
         // files' own call graph is intact. Comparing the owned edges before and after is what
         // establishes it, and a mismatch means the edit moved a call — nothing here can stand in
         // for a full run then.
-        if ($this->mergeInto !== null && $this->scopeToFiles !== null) {
-            if (IncrementalMerge::ownedEdgeKeySet($this->mergeInto, $this->scopeToFiles)
-                != IncrementalMerge::ownedEdgeKeySet($fullGraph, $this->scopeToFiles)) {
+        if ($mergeInto !== null && $scopeToFiles !== null) {
+            if (IncrementalMerge::ownedEdgeKeySet($mergeInto, $scopeToFiles)
+                != IncrementalMerge::ownedEdgeKeySet($fullGraph, $scopeToFiles)) {
                 throw new ScopedRebuildNotApplicable;
             }
 
-            $fullGraph = IncrementalMerge::applyPartial($this->mergeInto, $fullGraph, $this->scopeToFiles);
+            $fullGraph = IncrementalMerge::applyPartial($mergeInto, $fullGraph, $scopeToFiles);
         }
 
         $this->emit('step:done', ['step' => 'graph', 'count' => $fullGraph->nodeCount(), 'unit' => 'node', 'extra' => $fullGraph->edgeCount().' edges', 'message' => "    {$fullGraph->nodeCount()} nodes, {$fullGraph->edgeCount()} edges"]);
