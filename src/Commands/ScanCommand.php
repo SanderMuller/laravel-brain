@@ -5,7 +5,9 @@ declare(strict_types=1);
 namespace LaraMint\LaravelBrain\Commands;
 
 use Illuminate\Console\Command;
+use LaraMint\LaravelBrain\Analysis\Incremental\ScopedRebuildNotApplicable;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
+use LaraMint\LaravelBrain\Graph\Graph;
 use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
 class ScanCommand extends Command
@@ -63,7 +65,19 @@ class ScanCommand extends Command
             if (! empty($changed)) {
                 $this->newLine();
                 $this->line('  <fg=yellow>⚡ Changed:</> '.$this->summariseChanged($changed));
-                $this->runScan($projectPath, verbose: false);
+
+                $scope = $this->scopeForRescan($mtimes, $current);
+                $started = microtime(true);
+                try {
+                    $this->runScan($projectPath, verbose: false, scopeToFiles: $scope);
+                    $mode = $scope === null ? 'full' : 'scoped';
+                } catch (ScopedRebuildNotApplicable) {
+                    // The edit moved a call, so the previous graph's edges no longer hold.
+                    $this->runScan($projectPath, verbose: false);
+                    $mode = 'full (the change moved a call)';
+                }
+                $this->line(sprintf('  <fg=gray>%s rescan in %dms</>', $mode, (int) ((microtime(true) - $started) * 1000)));
+
                 $mtimes = $current;
             }
         }
@@ -94,6 +108,38 @@ class ScanCommand extends Command
         }
 
         return $mtimes;
+    }
+
+    /**
+     * The files a scoped rescan may be limited to, or null when only a full one will do.
+     *
+     * A scoped rescan reuses the previous graph's edges wholesale, so it holds only while the
+     * shape of the project is unchanged: a file appearing or disappearing can move the route
+     * table or reachability, and anything outside `app/` — routes, config — can rewrite the
+     * graph from the top. Those cases are not worth reasoning about incrementally.
+     *
+     * @param  array<string, int>  $old
+     * @param  array<string, int>  $new
+     * @return string[]|null
+     */
+    private function scopeForRescan(array $old, array $new): ?array
+    {
+        if (count($old) !== count($new) || array_diff_key($old, $new) !== [] || array_diff_key($new, $old) !== []) {
+            return null;
+        }
+
+        $modified = [];
+        foreach ($new as $path => $mtime) {
+            if ($old[$path] === $mtime) {
+                continue;
+            }
+            if (! str_contains($path, '/app/')) {
+                return null;
+            }
+            $modified[] = $path;
+        }
+
+        return $modified === [] ? null : $modified;
     }
 
     private function detectChanges(array $old, array $new): array
@@ -172,7 +218,14 @@ class ScanCommand extends Command
 
     // ── Shared scan logic ─────────────────────────────────────────────────────
 
-    private function runScan(string $projectPath, bool $verbose): int
+    /** Graph from the last completed scan, reused by a scoped rescan in watch mode. */
+    private ?Graph $lastGraph = null;
+
+    /**
+     * @param  string[]|null  $scopeToFiles  trace only these files' controllers and merge into
+     *                                       the previous graph; null runs a full analysis
+     */
+    private function runScan(string $projectPath, bool $verbose, ?array $scopeToFiles = null): int
     {
         $totalStart = microtime(true);
 
@@ -188,10 +241,15 @@ class ScanCommand extends Command
         }
 
         $analyzer = new ProjectAnalyzer;
+        if ($scopeToFiles !== null && $this->lastGraph !== null) {
+            $analyzer->scopedTo($scopeToFiles, $this->lastGraph);
+        }
 
         $result = $analyzer->analyze($projectPath, function (string $event, array $data) use ($verbose): void {
             $this->handleProgress($event, $data, $verbose);
         });
+
+        $this->lastGraph = $result->fullGraph;
 
         $store = GraphStoreFactory::make();
         $store->ensureSchema();

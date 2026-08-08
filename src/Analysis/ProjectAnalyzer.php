@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis;
 
+use LaraMint\LaravelBrain\Analysis\Incremental\IncrementalMerge;
+use LaraMint\LaravelBrain\Analysis\Incremental\ScopedRebuildNotApplicable;
 use LaraMint\LaravelBrain\Graph\Graph;
 use LaraMint\LaravelBrain\Graph\GraphBuilder;
 use LaraMint\LaravelBrain\Graph\GraphSplitter;
@@ -130,6 +132,34 @@ class ProjectAnalyzer
         };
     }
 
+    /** @var string[]|null files to scope tracing to; null means trace everything */
+    private ?array $scopeToFiles = null;
+
+    /** Graph from the previous full run, which a scoped run merges its result into. */
+    private ?Graph $mergeInto = null;
+
+    /**
+     * Trace only the controllers declared in these files, and merge the result into the graph
+     * a previous full run produced.
+     *
+     * Everything else on the pass still runs in full — routes, commands, channels, the split —
+     * because those are a couple of percent of a scan between them. What it skips is tracing
+     * every controller in the project, which is nearly all of the rest.
+     *
+     * The caller owns the decision to use this: it is only sound when no file was added or
+     * deleted and nothing outside `app/` moved, which is what {@see IncrementalAnalyzer}
+     * checks before it calls.
+     *
+     * @param  string[]  $changedFiles
+     */
+    public function scopedTo(array $changedFiles, Graph $previous): static
+    {
+        $this->scopeToFiles = $changedFiles;
+        $this->mergeInto = $previous;
+
+        return $this;
+    }
+
     public function analyze(string $projectRoot, ?callable $onProgress = null): AnalysisResult
     {
         if ($onProgress !== null) {
@@ -157,6 +187,15 @@ class ProjectAnalyzer
 
         $this->emit('step:start', ['step' => 'controllers', 'label' => 'Analyzing controllers', 'message' => '  → Analyzing controllers...']);
         $controllers = $this->controllerAnalyzer->analyze($projectRoot, $routes);
+
+        // A scoped run traces only the controllers declared in the changed files.
+        if ($this->scopeToFiles !== null) {
+            $wanted = array_flip(array_map(static fn (string $f): string => realpath($f) ?: $f, $this->scopeToFiles));
+            $controllers = array_filter(
+                $controllers,
+                static fn (ControllerDefinition $c): bool => isset($wanted[realpath($c->file) ?: $c->file]),
+            );
+        }
         $this->emit('step:done', ['step' => 'controllers', 'count' => count($controllers), 'unit' => 'controller', 'message' => '    Found '.count($controllers).' controller(s)']);
 
         $this->emit('step:start', ['step' => 'lifecycle', 'label' => 'Tracing full lifecycle', 'message' => '  → Tracing full lifecycle (deep)...']);
@@ -196,6 +235,7 @@ class ProjectAnalyzer
             }
         }
         $modelFqcns = array_unique(array_merge($modelFqcns, $this->modelAnalyzer->discoverModels($projectRoot)));
+
         $models = $this->modelAnalyzer->analyze($projectRoot, $modelFqcns);
         $this->emit('step:done', ['step' => 'models', 'count' => count($models), 'unit' => 'model', 'message' => '    Found '.count($models).' model(s)']);
 
@@ -326,12 +366,35 @@ class ProjectAnalyzer
         $this->graphBuilder->addViewComposition($viewComposition);
         $this->emit('step:done', ['step' => 'views', 'count' => count($viewComposition), 'unit' => 'composed view', 'message' => '    Mapped '.count($viewComposition).' composing view(s)']);
 
+        // A scoped run has built only the changed files' share of the graph; the rest of it comes
+        // from the previous full run, with those files' nodes substituted in place.
+        //
+        // That reuses every edge from the previous graph, which is only sound while the changed
+        // files' own call graph is intact. Comparing the owned edges before and after is what
+        // establishes it, and a mismatch means the edit moved a call — nothing here can stand in
+        // for a full run then.
+        if ($this->mergeInto !== null && $this->scopeToFiles !== null) {
+            if (IncrementalMerge::ownedEdgeKeySet($this->mergeInto, $this->scopeToFiles)
+                != IncrementalMerge::ownedEdgeKeySet($fullGraph, $this->scopeToFiles)) {
+                throw new ScopedRebuildNotApplicable;
+            }
+
+            $fullGraph = IncrementalMerge::applyPartial($this->mergeInto, $fullGraph, $this->scopeToFiles);
+        }
+
         $this->emit('step:done', ['step' => 'graph', 'count' => $fullGraph->nodeCount(), 'unit' => 'node', 'extra' => $fullGraph->edgeCount().' edges', 'message' => "    {$fullGraph->nodeCount()} nodes, {$fullGraph->edgeCount()} edges"]);
 
         $this->emit('step:start', ['step' => 'split', 'label' => 'Splitting into tab subgraphs', 'message' => '  → Splitting into tab subgraphs...']);
         $split = $this->graphSplitter->split($fullGraph, $routes, $commands, $channels, $schedules, $projectName, $analyzedAt, $filamentResult['panels'], $filamentResult['resources'], $filamentResult['pages']);
 
-        $erd = $this->graphSplitter->buildErdTab($models, $projectName, $analyzedAt);
+        // Ordered by name, because $models arrives led by whatever the call chain reached first
+        // and the ERD is laid out in that order. Left as traced, the diagram reshuffles whenever
+        // an unrelated controller changes which model it happens to touch first — and a scoped
+        // rescan, tracing fewer controllers, would reorder it on every tick.
+        $erdModels = $models;
+        ksort($erdModels);
+
+        $erd = $this->graphSplitter->buildErdTab($erdModels, $projectName, $analyzedAt);
         if ($erd !== null) {
             $split['subgraphs'][$erd['id']] = $erd['graph'];
             $split['manifest'][] = $erd['manifest'];
