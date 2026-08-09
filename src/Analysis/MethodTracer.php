@@ -620,7 +620,7 @@ class MethodTracer
                     $val = $first instanceof Node\Arg ? $first->value : $first;
                     if ($val instanceof Node\Expr\New_ && $val->class instanceof Node\Name) {
                         $short = $val->class->toString();
-                        $nf = $this->useMap[$short] ?? $short;
+                        $nf = PhpFileParser::resolvedName($val->class) ?? $this->useMap[$short] ?? $short;
                         if ($this->tracer->looksLikeMail($nf)) {
                             $this->hops[] = [
                                 'fqcn' => $nf,
@@ -843,7 +843,7 @@ class MethodTracer
                     && $val->name->toString() === 'class'
                 ) {
                     $short = $val->class->toString();
-                    $fqcn = $this->useMap[$short] ?? $short;
+                    $fqcn = PhpFileParser::resolvedName($val->class) ?? $this->useMap[$short] ?? $short;
                     if ($this->looksLikeModel($fqcn)) {
                         $this->hops[] = ['fqcn' => $fqcn, 'method' => $ability, 'type' => 'model', 'visibility' => 'public'];
                     }
@@ -918,7 +918,9 @@ class MethodTracer
                 }
                 $value = $node instanceof Node\Arg ? $node->value : $node;
                 if ($value instanceof Node\Expr\New_ && $value->class instanceof Node\Name) {
-                    return $value->class->toString();
+                    // The resolved name first: a sibling in the same namespace needs no `use`,
+                    // so the written name has no useMap entry and would stay short.
+                    return PhpFileParser::resolvedName($value->class) ?? $value->class->toString();
                 }
 
                 return null;
@@ -1138,7 +1140,9 @@ class MethodTracer
                     return null;
                 }
                 if ($type instanceof Node\Name) {
-                    return $type->toString();
+                    // A promoted or injected dependency typed as a same-namespace sibling has
+                    // no `use` entry, so the written name would survive as a short one.
+                    return PhpFileParser::resolvedName($type) ?? $type->toString();
                 }
                 if ($type instanceof Node\NullableType) {
                     return $this->resolveType($type->type);

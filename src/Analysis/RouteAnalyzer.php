@@ -1532,8 +1532,10 @@ class RouteAnalyzer
                     if ($class instanceof Node\Name) {
                         $name = $class->toString();
 
-                        // Return FQCN from use-map, not the short name
-                        return $this->useMap[$name] ?? $name;
+                        // Return the FQCN, not the short name. A routes file that declares a
+                        // namespace can name a controller in that namespace with no import, so
+                        // the use-map alone leaves it short.
+                        return PhpFileParser::resolvedName($class) ?? $this->useMap[$name] ?? $name;
                     }
                 }
                 if ($node instanceof Node\Scalar\String_) {
