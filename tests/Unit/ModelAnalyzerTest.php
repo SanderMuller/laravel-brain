@@ -37,3 +37,14 @@ it('detects belongsTo relationship on Order model', function () {
 
     expect($types)->ToBeArray()->toContain('belongsTo');
 });
+
+it('resolves a related model in the same namespace', function () {
+    // Order::user() does `$this->belongsTo(User::class)`. Related models almost always sit
+    // together in App\Models, so the target needs no import — and left short it became a second
+    // node for a model the graph already had, with the relationship pointing at that one.
+    $models = (new ModelAnalyzer)->analyze(fixture('laravel-project'), ['App\\Models\\Order']);
+    $related = array_column($models['App\\Models\\Order']->relationships, 'related');
+
+    expect($related)->toContain('App\\Models\\User')
+        ->and($related)->not->toContain('User');
+});

@@ -300,7 +300,7 @@ class RouteAnalyzer
      * @param  Node\Stmt[]  $ast
      * @return string[]
      */
-    private function collectIncludeTargets(array $ast, string $file): array
+    public function collectIncludeTargets(array $ast, string $file): array
     {
         $analyzer = $this;
         $traverser = new NodeTraverser;
@@ -412,9 +412,11 @@ class RouteAnalyzer
      * Recognised shapes (any class short-named `Route` qualifies):
      *   - Route::middleware('api')->prefix('api/admin')->group(base_path('routes/admin.php'));
      *   - Route::group(['prefix' => 'api/admin', 'middleware' => 'api'], base_path(...));
+     *   - Route::group([...], function () { require base_path('routes/web.php'); });
      *
-     * Calls whose routes-argument is a closure are ignored — those routes are
-     * defined inline and don't reference an external file.
+     * The closure form is what `laravel/laravel` shipped for years, and the file it requires
+     * needs the group's context just as much as one passed by path — without it those routes
+     * lose the group's namespace, middleware and prefix together.
      *
      * @return array<string, array{prefix: string, middlewares: string[], namespace: string, controller: string}>
      */
@@ -457,11 +459,50 @@ class RouteAnalyzer
      * @param  Node\Stmt[]  $ast
      * @return array<string, array{prefix: string, middlewares: string[], namespace: string, controller: string}>
      */
+    /**
+     * String property defaults declared anywhere in a parsed file, keyed by property name.
+     *
+     * Only literal strings are recorded; anything computed has no single value to record.
+     *
+     * @param  Node\Stmt[]  $ast
+     * @return array<string, string>
+     */
+    private function collectPropertyDefaults(array $ast): array
+    {
+        $traverser = new NodeTraverser;
+        $visitor = new class extends NodeVisitorAbstract
+        {
+            /** @var array<string, string> */
+            public array $defaults = [];
+
+            public function enterNode(Node $node): ?int
+            {
+                if (! $node instanceof Node\Stmt\Property) {
+                    return null;
+                }
+                foreach ($node->props as $prop) {
+                    if ($prop->default instanceof Node\Scalar\String_) {
+                        $this->defaults[$prop->name->toString()] = $prop->default->value;
+                    }
+                }
+
+                return null;
+            }
+        };
+        $traverser->addVisitor($visitor);
+        $traverser->traverse($ast);
+
+        return $visitor->defaults;
+    }
+
     private function extractGroupRegistrations(array $ast, string $file): array
     {
         $analyzer = $this;
         $traverser = new NodeTraverser;
-        $visitor = new class($analyzer, $file) extends NodeVisitorAbstract
+        // Collected up front rather than while walking: a provider declares `$namespace` before
+        // the method that reads it, but nothing guarantees that order.
+        $propertyDefaults = $this->collectPropertyDefaults($ast);
+        $visitor = new class($analyzer, $file, $propertyDefaults) extends NodeVisitorAbstract
         {
             /** @var array<string, array{prefix: string, middlewares: string[], namespace: string, controller: string}> */
             public array $registrations = [];
@@ -470,10 +511,17 @@ class RouteAnalyzer
 
             private string $file;
 
-            public function __construct(RouteAnalyzer $analyzer, string $file)
+            /** @var array<string, string> property name => literal default */
+            private array $propertyDefaults;
+
+            /**
+             * @param  array<string, string>  $propertyDefaults
+             */
+            public function __construct(RouteAnalyzer $analyzer, string $file, array $propertyDefaults)
             {
                 $this->analyzer = $analyzer;
                 $this->file = $file;
+                $this->propertyDefaults = $propertyDefaults;
             }
 
             public function enterNode(Node $node): ?int
@@ -491,29 +539,39 @@ class RouteAnalyzer
                         continue;
                     }
                     $value = $arg->value;
-                    if ($value instanceof Node\Expr\Array_
-                        || $value instanceof Node\Expr\Closure
-                        || $value instanceof Node\Expr\ArrowFunction
-                    ) {
+                    if ($value instanceof Node\Expr\Array_) {
                         continue;
                     }
-                    $path = $this->analyzer->resolveIncludePath($value, $this->file);
-                    if ($path === null) {
-                        continue;
+
+                    // A closure body may `require` the routes file rather than the call naming
+                    // it directly; those routes still belong to this group.
+                    $paths = [];
+                    if ($value instanceof Node\Expr\Closure) {
+                        $paths = $this->analyzer->collectIncludeTargets($value->stmts, $this->file);
+                    } elseif ($value instanceof Node\Expr\ArrowFunction) {
+                        $paths = $this->analyzer->collectIncludeTargets(
+                            [new Node\Stmt\Expression($value->expr)],
+                            $this->file,
+                        );
+                    } else {
+                        $path = $this->analyzer->resolveIncludePath($value, $this->file);
+                        if ($path !== null) {
+                            $paths = [$path];
+                        }
                     }
-                    $real = realpath($path);
-                    if ($real === false) {
-                        continue;
+
+                    foreach ($paths as $path) {
+                        $real = realpath($path);
+                        if ($real === false || isset($this->registrations[$real])) {
+                            continue;
+                        }
+                        $this->registrations[$real] = [
+                            'prefix' => $prefix,
+                            'middlewares' => $middlewares,
+                            'namespace' => $namespace,
+                            'controller' => $controller,
+                        ];
                     }
-                    if (isset($this->registrations[$real])) {
-                        continue;
-                    }
-                    $this->registrations[$real] = [
-                        'prefix' => $prefix,
-                        'middlewares' => $middlewares,
-                        'namespace' => $namespace,
-                        'controller' => $controller,
-                    ];
                 }
 
                 return null;
@@ -581,7 +639,21 @@ class RouteAnalyzer
 
             private function literalString(Node $value): string
             {
-                return $value instanceof Node\Scalar\String_ ? $value->value : '';
+                if ($value instanceof Node\Scalar\String_) {
+                    return $value->value;
+                }
+
+                // `'namespace' => $this->namespace` — the controller namespace a provider applies
+                // is conventionally held in a property rather than written at the call.
+                if ($value instanceof Node\Expr\PropertyFetch
+                    && $value->var instanceof Node\Expr\Variable
+                    && $value->var->name === 'this'
+                    && $value->name instanceof Node\Identifier
+                ) {
+                    return $this->propertyDefaults[$value->name->toString()] ?? '';
+                }
+
+                return '';
             }
 
             private function literalClassRef(Node $value): string
@@ -1087,16 +1159,24 @@ class RouteAnalyzer
                 $stackController = end($this->controllerStack) ?: '';
                 $controllerContext = $chainController !== '' ? $chainController : $stackController;
 
-                [$controller, $actionMethod, $closureNode] = $this->extractAction($node->args[1] ?? null, $controllerContext);
+                [$controller, $actionMethod, $closureNode, $mayPrependNamespace] = $this->extractAction($node->args[1] ?? null, $controllerContext);
 
-                if ($controller !== 'Closure' && $controller !== '' && ! str_starts_with($controller, '\\')) {
+                // An array action can carry its own middleware alongside `uses`.
+                $actionArg = $node->args[1] ?? null;
+                $actionValue = $actionArg instanceof Node\Arg ? $actionArg->value : $actionArg;
+                if ($actionValue !== null) {
+                    $actionMiddleware = $this->arrayValueFor($actionValue, 'middleware');
+                    if ($actionMiddleware !== null) {
+                        $extraMiddlewares = array_merge($extraMiddlewares, $this->extractMiddlewareList($actionMiddleware));
+                    }
+                }
+
+                if ($mayPrependNamespace && $controller !== 'Closure' && $controller !== '') {
                     $namespace = implode('\\', array_filter($this->namespaceStack));
                     if ($chainNamespace) {
                         $namespace = $namespace ? $namespace.'\\'.$chainNamespace : $chainNamespace;
                     }
-                    if ($namespace) {
-                        $controller = rtrim($namespace, '\\').'\\'.ltrim($controller, '\\');
-                    }
+                    $controller = $this->prependNamespace($controller, $namespace);
                 }
 
                 $fullUri = $this->joinUri(implode('', $this->prefixStack).$chainPrefix, $uri);
@@ -1251,14 +1331,12 @@ class RouteAnalyzer
                     $this->walkChain($node->var, $chainPrefix, $chainMiddlewares, $chainNamespace);
                 }
 
-                if ($controllerFqcn !== '' && ! str_starts_with($controllerFqcn, '\\')) {
+                if ($controllerFqcn !== '') {
                     $namespace = implode('\\', array_filter($this->namespaceStack));
                     if ($chainNamespace) {
                         $namespace = $namespace ? $namespace.'\\'.$chainNamespace : $chainNamespace;
                     }
-                    if ($namespace) {
-                        $controllerFqcn = rtrim($namespace, '\\').'\\'.ltrim($controllerFqcn, '\\');
-                    }
+                    $controllerFqcn = $this->prependNamespace($controllerFqcn, $namespace);
                 }
                 $fullUri = $this->joinUri(implode('', $this->prefixStack).$chainPrefix, $uri);
                 $middlewares = array_merge(
@@ -1473,14 +1551,28 @@ class RouteAnalyzer
             }
 
             /**
-             * @return array{0: string, 1: string, 2: Node\Expr\Closure|Node\Expr\ArrowFunction|null}
+             * The fourth element says whether a group namespace may be prepended to the
+             * controller. The router only does that for an action written as a string, or an
+             * array whose `uses` is a string ({@see Router::actionReferencesController()}) — a
+             * `[Controller::class, 'method']` pair names the class outright and prefixing it
+             * would produce `App\\Http\\Controllers\\App\\Http\\Controllers\\Thing`.
+             *
+             * @return array{0: string, 1: string, 2: Node\Expr\Closure|Node\Expr\ArrowFunction|null, 3: bool}
              */
             private function extractAction(?Node $node, string $controllerContext = ''): array
             {
                 if ($node === null) {
-                    return ['', '', null];
+                    return ['', '', null, false];
                 }
                 $value = $node instanceof Node\Arg ? $node->value : $node;
+
+                // ['uses' => 'Controller@method', 'as' => ..., 'middleware' => ...]. Checked
+                // before the positional form below, which a two-entry ['as' => ..., 'uses' => ...]
+                // would otherwise match — taking the route's name as its controller.
+                $uses = $this->arrayValueFor($value, 'uses');
+                if ($uses !== null) {
+                    return $this->extractAction($uses, $controllerContext);
+                }
 
                 // [Controller::class, 'method']
                 if ($value instanceof Node\Expr\Array_ && count($value->items) >= 2) {
@@ -1490,7 +1582,7 @@ class RouteAnalyzer
                         $controller = $this->extractClassRef($classItem->value);
                         $actionMethod = $this->extractString($methodItem) ?? '';
 
-                        return [$controller, $actionMethod, null];
+                        return [$controller, $actionMethod, null, false];
                     }
                 }
 
@@ -1499,30 +1591,81 @@ class RouteAnalyzer
                     if (str_contains($value->value, '@')) {
                         $parts = explode('@', $value->value, 2);
 
-                        return [$parts[0], $parts[1], null];
+                        return [$parts[0], $parts[1], null, true];
                     }
 
                     // Inside Route::controller(X::class)->group(...) a bare string is a
                     // method name on the group controller, not an invokable controller.
                     if ($controllerContext !== '') {
-                        return [$controllerContext, $value->value, null];
+                        return [$controllerContext, $value->value, null, false];
                     }
 
-                    return [$value->value, '__invoke', null];
+                    return [$value->value, '__invoke', null, true];
                 }
 
                 // Controller::class (for __invoke)
                 $classRef = $this->extractClassRef($value);
                 if ($classRef !== '') {
-                    return [$classRef, '__invoke', null];
+                    return [$classRef, '__invoke', null, false];
                 }
 
                 // Closure routes
                 if ($value instanceof Node\Expr\Closure || $value instanceof Node\Expr\ArrowFunction) {
-                    return ['Closure', '__invoke', $value];
+                    return ['Closure', '__invoke', $value, false];
                 }
 
-                return ['', '', null];
+                return ['', '', null, false];
+            }
+
+            /**
+             * Qualify a controller with the group namespace, on the router's terms
+             * ({@see Router::prependGroupNamespace()}): a leading `\` means the name is already
+             * absolute, and a name that already begins with the group namespace is left alone —
+             * `Controller::class` evaluates to a fully-qualified string at runtime, so without
+             * that second guard a resource route inside a namespaced group would be prefixed
+             * twice.
+             *
+             * That second guard compares on a separator, where the router compares on the raw
+             * string. The router is always holding the whole merged namespace by then, so the
+             * distinction never shows there; here a group can contribute one segment at a time,
+             * and `Admin` is a string prefix of `AdminController` while being nothing of the kind.
+             */
+            private function prependNamespace(string $class, string $namespace): string
+            {
+                // A leading `\` marks the name absolute. Everything else keys a controller
+                // without one, so it is dropped here rather than left to key a second node
+                // that can never join the first.
+                if (str_starts_with($class, '\\')) {
+                    return ltrim($class, '\\');
+                }
+
+                $namespace = rtrim($namespace, '\\');
+                if ($namespace === '' || str_starts_with($class, $namespace.'\\')) {
+                    return $class;
+                }
+
+                return $namespace.'\\'.$class;
+            }
+
+            /**
+             * The value stored under a string key of an array literal, or null when the node is
+             * not an array or has no such key.
+             */
+            private function arrayValueFor(Node $node, string $key): ?Node
+            {
+                if (! $node instanceof Node\Expr\Array_) {
+                    return null;
+                }
+                foreach ($node->items as $item) {
+                    if ($item === null || ! $item->key instanceof Node\Scalar\String_) {
+                        continue;
+                    }
+                    if ($item->key->value === $key) {
+                        return $item->value;
+                    }
+                }
+
+                return null;
             }
 
             private function extractClassRef(Node $node): string
@@ -1532,8 +1675,10 @@ class RouteAnalyzer
                     if ($class instanceof Node\Name) {
                         $name = $class->toString();
 
-                        // Return FQCN from use-map, not the short name
-                        return $this->useMap[$name] ?? $name;
+                        // Return the FQCN, not the short name. A routes file that declares a
+                        // namespace can name a controller in that namespace with no import, so
+                        // the use-map alone leaves it short.
+                        return PhpFileParser::resolvedName($class) ?? $this->useMap[$name] ?? $name;
                     }
                 }
                 if ($node instanceof Node\Scalar\String_) {

@@ -1,5 +1,7 @@
 <?php
 
+use LaraMint\LaravelBrain\Analysis\ModelAnalyzer;
+use LaraMint\LaravelBrain\Analysis\ModelDefinition;
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 use LaraMint\LaravelBrain\Graph\Edge;
@@ -10,6 +12,8 @@ use LaraMint\LaravelBrain\Graph\Node;
 // RouteDefinition is declared alongside RouteAnalyzer in RouteAnalyzer.php;
 // reference RouteAnalyzer so PSR-4 autoloading pulls in that file.
 class_exists(RouteAnalyzer::class);
+// ModelDefinition likewise lives in ModelAnalyzer.php.
+class_exists(ModelAnalyzer::class);
 
 function splitterRouteNode(string $method, string $uri, ?array $security = null): Node
 {
@@ -177,4 +181,22 @@ it('emits a subgraph in the full graph\'s node and edge order', function () {
     expect($subOrder)->toBe(array_values(array_filter($fullOrder, fn ($id) => in_array($id, $subOrder, true))))
         ->and($subOrder)->not->toContain('action::App\Http\Controllers\OtherController::index')
         ->and(array_map(fn ($e) => $e->id, $sub->edges()))->toBe(['e0', 'e1', 'e2']);
+});
+
+it('lays the ERD out in the order the models are given', function () {
+    // Pins why ProjectAnalyzer sorts before calling this: the tab is built in iteration order,
+    // so an unsorted list makes the diagram reshuffle whenever tracing reaches models in a
+    // different order — which a scoped rescan, tracing fewer controllers, does every time.
+    $model = fn (string $fqcn) => new ModelDefinition($fqcn, '/tmp/'.$fqcn.'.php', [], []);
+
+    $ordered = ['App\Models\Alpha' => $model('App\Models\Alpha'), 'App\Models\Beta' => $model('App\Models\Beta')];
+    $reversed = array_reverse($ordered, preserve_keys: true);
+
+    $ids = function (array $models): array {
+        $tab = (new GraphSplitter)->buildErdTab($models, 'proj', '2026-01-01T00:00:00Z');
+
+        return array_map(fn ($n) => $n->id, $tab['graph']->nodes());
+    };
+
+    expect($ids($ordered))->not->toBe($ids($reversed));
 });

@@ -463,3 +463,209 @@ function routeAnalyzerTestDeleteTree(string $dir): void
     }
     @rmdir($dir);
 }
+
+it('resolves a controller named in a namespaced routes file without an import', function () {
+    // A routes file may declare a namespace, and a controller in that namespace then needs no
+    // `use`. Resolving through the import map alone left the controller short, which keys every
+    // route and call-chain edge that touches it on a name nothing else in the graph uses.
+    $root = sys_get_temp_dir().'/brain-routens-'.uniqid();
+    mkdir($root.'/routes', 0o777, true);
+    mkdir($root.'/app/Http/Controllers/Dev', 0o777, true);
+
+    file_put_contents($root.'/routes/web.php', <<<'PHP'
+        <?php
+
+        namespace App\Http\Controllers\Dev;
+
+        use Illuminate\Support\Facades\Route;
+
+        Route::get('dev', DevOverviewController::class);
+        PHP);
+    file_put_contents($root.'/app/Http/Controllers/Dev/DevOverviewController.php', <<<'PHP'
+        <?php
+
+        namespace App\Http\Controllers\Dev;
+
+        class DevOverviewController
+        {
+            public function __invoke() {}
+        }
+        PHP);
+
+    $routes = (new RouteAnalyzer)->analyze($root);
+    $dev = findRoute($routes, fn ($r) => str_contains($r->uri, 'dev'));
+
+    expect($dev)->not->toBeNull()
+        ->and($dev->controller)->toBe('App\Http\Controllers\Dev\DevOverviewController');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
+
+/**
+ * A throwaway project with a routes file and, optionally, a provider that loads it.
+ *
+ * @param  array<string, string>  $files  path relative to the project root => contents
+ */
+function routeProject(array $files): string
+{
+    $root = sys_get_temp_dir().'/brain-routes-'.uniqid();
+    foreach ($files as $path => $contents) {
+        $full = $root.'/'.$path;
+        if (! is_dir(dirname($full))) {
+            mkdir(dirname($full), 0o777, true);
+        }
+        file_put_contents($full, $contents);
+    }
+
+    return $root;
+}
+
+it('reads a controller from an array action rather than taking the route name as one', function () {
+    // ['as' => ..., 'uses' => ...] has two entries, so it matched the positional
+    // [Controller::class, 'method'] branch and the route's own name became its controller.
+    // The single-entry ['uses' => ...] matched nothing and the route was dropped outright.
+    $root = routeProject([
+        'routes/web.php' => '<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::get("b", ["as" => "b.name", "uses" => "BetaController@show"]);
+Route::get("c", ["uses" => "GammaController@edit"]);
+Route::get("e", ["uses" => "EpsilonController@go", "middleware" => "auth"]);
+',
+    ]);
+
+    $routes = (new RouteAnalyzer)->analyze($root);
+    $by = fn (string $uri) => findRoute($routes, fn ($r) => $r->uri === $uri);
+
+    expect($by('/b'))->not->toBeNull()
+        ->and($by('/b')->controller)->toBe('BetaController')
+        ->and($by('/b')->action)->toBe('show')
+        ->and($by('/c'))->not->toBeNull()
+        ->and($by('/c')->controller)->toBe('GammaController')
+        ->and($by('/c')->action)->toBe('edit')
+        ->and($by('/e')->middlewares)->toContain('auth');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
+
+it('applies the namespace and middleware of a provider group that requires its routes in a closure', function () {
+    // The registration scanner looked for a file path argument and skipped closures, so the
+    // shape laravel/laravel shipped for years recorded nothing and the routes file was parsed
+    // with no context — losing the group's namespace and middleware together. The namespace
+    // itself is a property default, which the literal-string reader returned '' for.
+    $root = routeProject([
+        'routes/web.php' => '<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::get("a", "AlphaController@index");
+',
+        'app/Providers/RouteServiceProvider.php' => '<?php
+
+namespace App\Providers;
+
+use Illuminate\Support\Facades\Route;
+
+class RouteServiceProvider
+{
+    protected $namespace = "App\Http\Controllers";
+
+    protected function mapWebRoutes(): void
+    {
+        Route::group([
+            "middleware" => "web",
+            "namespace" => $this->namespace,
+        ], static function (): void {
+            require base_path("routes/web.php");
+        });
+    }
+}
+',
+    ]);
+
+    $route = findRoute((new RouteAnalyzer)->analyze($root), fn ($r) => $r->uri === '/a');
+
+    expect($route)->not->toBeNull()
+        ->and($route->controller)->toBe('App\Http\Controllers\AlphaController')
+        ->and($route->middlewares)->toContain('web');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
+
+it('does not prepend a group namespace to a controller that already carries it', function () {
+    // Controller::class is a fully-qualified string at runtime, so prefixing it again yields
+    // App\Http\Controllers\App\Http\Controllers\Thing — a node nothing can join. The router
+    // guards this the same way, by leaving a name that already starts with the group namespace
+    // alone.
+    $root = routeProject([
+        'routes/web.php' => '<?php
+
+use App\Http\Controllers\ThingController;
+use Illuminate\Support\Facades\Route;
+
+Route::group(["namespace" => "App\Http\Controllers"], static function (): void {
+    Route::get("one", [ThingController::class, "index"]);
+    Route::resource("two", ThingController::class);
+});
+',
+        'app/Http/Controllers/ThingController.php' => '<?php
+
+namespace App\Http\Controllers;
+
+class ThingController {}
+',
+    ]);
+
+    foreach ((new RouteAnalyzer)->analyze($root) as $route) {
+        expect($route->controller)->toBe('App\Http\Controllers\ThingController');
+    }
+
+    exec('rm -rf '.escapeshellarg($root));
+});
+
+it('still qualifies a controller whose name merely begins with the namespace segment', function () {
+    // The "already carries it" guard has to compare on a separator: `Admin` is a string prefix
+    // of `AdminController` while being no namespace of it, and skipping there would leave the
+    // controller unqualified.
+    $root = routeProject([
+        'routes/web.php' => '<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::group(["namespace" => "Admin"], static function (): void {
+    Route::get("profile", "AdminController@profile");
+});
+',
+    ]);
+
+    $route = findRoute((new RouteAnalyzer)->analyze($root), fn ($r) => $r->uri === '/profile');
+
+    expect($route)->not->toBeNull()
+        ->and($route->controller)->toBe('Admin\AdminController');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
+
+it('keys a controller written with a leading backslash without one', function () {
+    // A leading \ says the name is absolute, not that it is part of the name. Keeping it makes
+    // a second controller node that can never join the one every other reference produces.
+    $root = routeProject([
+        'routes/web.php' => '<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::group(["namespace" => "App\Http\Controllers"], static function (): void {
+    Route::get("s1", "\\\\App\\\\Http\\\\Controllers\\\\ZetaController@go");
+    Route::get("s2", ["uses" => "\\\\App\\\\Http\\\\Controllers\\\\ZetaController@go"]);
+});
+',
+    ]);
+
+    foreach ((new RouteAnalyzer)->analyze($root) as $route) {
+        expect($route->controller)->toBe('App\Http\Controllers\ZetaController')
+            ->and($route->action)->toBe('go');
+    }
+
+    exec('rm -rf '.escapeshellarg($root));
+});

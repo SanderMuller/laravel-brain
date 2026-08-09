@@ -416,7 +416,10 @@ class ModelAnalyzer
                 if ($node instanceof Node\Expr\ClassConstFetch && $node->class instanceof Node\Name) {
                     $name = $node->class->toString();
 
-                    return $this->useMap[$name] ?? $name;
+                    // A related model usually sits in the same namespace and so needs no import.
+                    // Left short it becomes a second node for a model the graph already has, and
+                    // the relationship points at that one instead of the real one.
+                    return PhpFileParser::resolvedName($node->class) ?? $this->useMap[$name] ?? $name;
                 }
                 if ($node instanceof Node\Scalar\String_) {
                     return $node->value;
