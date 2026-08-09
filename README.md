@@ -31,6 +31,8 @@ The scan writes JSON graph files to `storage/app/laravel-brain/`. The viewer is 
 ## Features
 
 - **Full lifecycle tracing** — Follows every route from HTTP verb → controller → service → repository → model → events/jobs
+- **Event listener discovery** — Finds listeners registered by convention, via `EventServiceProvider::$listen`/`$subscribe`, or `#[AsEventListener]` attributes, and links them to the events they handle
+- **Unresolved dispatch detection** — Flags a job/event dispatch that can't be resolved statically (a variable or factory result) instead of silently showing "no impact"; recognizes custom dispatch helper functions too
 - **Filament PHP support** — Discovers panels, resources, pages, widgets, and relation managers; traces call chains from Filament page methods the same way controller actions are traced
 - **Artisan command discovery** — Maps class-based commands, closure commands from `routes/console.php`, and Kernel-registered commands
 - **Scheduler tracing** — Visualizes scheduled tasks (`command`, `job`, `call`) with their frequency
@@ -42,12 +44,16 @@ The scan writes JSON graph files to `storage/app/laravel-brain/`. The viewer is 
 - **Per-route tabs** — Each route gets its own isolated subgraph tab
 - **Middleware mapping** — Shows which middleware guards each route
 - **Model relationships** — Displays `hasMany`, `belongsTo`, and other Eloquent relations
+- **Observer discovery** — Finds Eloquent observers (`#[ObservedBy]`, `Model::observe()`, or `booted()`) and links them to the models they observe
+- **Policy resolution** — Resolves each model's authorization policy (explicit map, `#[UsePolicy]` attribute, or naming convention) and links it in the graph
+- **View composition mapping** — Traces `@include`, `@extends`, `@component`, `@each`, and `<x-...>` components as view → view edges, so a shared partial shows every entry point it reaches
+- **API resource edges** — Traces `UserResource::make()`/`::collection()`/`new` and nested resource composition as edges, so a changed resource shows every controller and resource that uses it
 - **Method flowcharts** — See internal flow as a step-by-step diagram with a large modal popup view
 - **Sequence diagrams** — Route nodes render an SVG sequence diagram (exportable as PNG or Mermaid) showing the full actor chain
 - **Source viewer** — Read the actual source file inline or in a focused popup
 - **Export** — Export any graph as PNG or Mermaid diagram
 - **Multiple layouts** — Hierarchical (dagre), force-directed (cose-bilkent), breadth-first, circle, grid
-- **Watch mode** — Auto-rescans on PHP file changes
+- **Watch mode** — Auto-rescans on PHP file changes; a change confined to `app/` re-traces only the affected controllers and merges the result into the previous graph instead of rebuilding it from scratch
 - **Route stress test** — From a selected **route** node, run concurrent HTTP load against that endpoint (via [`laramint/laravel-stress`](https://github.com/LaraMint/laravel-stress)): configure request count, concurrency, headers, body, and timeout; see timing percentiles (min/avg/p50/p95/p99/max), throughput, and status distribution in the sidebar. While a run is active, the graph highlights the route and animates packets along the request path
 - **AI context export** — Copy a deterministic, token-optimized context snapshot for any node to your clipboard with one click (🤖 button in the sidebar). Also available as `brain:export-context` Artisan command and `GET /_laravel-brain/api/context` API endpoint. Context includes call chain, complexity hotspots, DB operations, source snippets, and all backend/frontend packages — always reproducible from the same scan data
 - **AI rules generation** — Generate ready-to-use context files for seven AI coding assistants (Claude Code, Cursor, Windsurf, GitHub Copilot, JetBrains Junie, Aider, AGENTS.md) directly from the UI (**Export → Generate AI Rules**) or via `brain:generate-rules`. Each file is populated with your project's real architecture, routes, packages, and code-health data
@@ -190,6 +196,8 @@ Re-scan automatically whenever a PHP file changes:
 php artisan brain:scan --watch
 php artisan brain:scan --watch --interval=5   # poll every 5 seconds (default: 3)
 ```
+
+Each rescan traces only the controllers declared in the changed files and merges the result into the previous graph, rather than rebuilding it from scratch — the output is identical to a full scan, just faster. A full rescan still runs automatically whenever a file is added or deleted, or when anything outside `app/` changes (routes, config).
 
 ### Open the viewer
 
