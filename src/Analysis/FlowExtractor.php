@@ -316,7 +316,7 @@ class FlowExtractor
                 return ['type' => 'dispatch', 'label' => "Bus::{$method}(...)"];
             }
 
-            return ['type' => 'call', 'label' => "{$short}::{$method}(...)"];
+            return $this->withCallbackBody(['type' => 'call', 'label' => "{$short}::{$method}(...)"], $expr->args);
         }
 
         // $this->service->method(...)  /  $var->method(...)
@@ -327,7 +327,7 @@ class FlowExtractor
                 return ['type' => 'dispatch', 'label' => $this->shortExpr($expr)];
             }
 
-            return ['type' => 'call', 'label' => $this->shortExpr($expr)];
+            return $this->withCallbackBody(['type' => 'call', 'label' => $this->shortExpr($expr)], $expr->args);
         }
 
         // event(new SomeEvent)  /  dispatch(new SomeJob)  /  dispatch_sync(new SomeJob)
@@ -340,10 +340,51 @@ class FlowExtractor
                 return ['type' => 'dispatch', 'label' => $this->shortExpr($expr)];
             }
 
-            return ['type' => 'call', 'label' => $this->shortExpr($expr)];
+            return $this->withCallbackBody(['type' => 'call', 'label' => $this->shortExpr($expr)], $expr->args);
         }
 
         return null;
+    }
+
+    /**
+     * Give a call the steps of the callback it was passed, so the work inside is part of the flow.
+     *
+     * `DB::transaction(function () { ... })` is one statement holding a whole block of work, and
+     * without this the flow chart shows the wrapper and stops — the body simply vanishes. The same
+     * is true of `Cache::remember`, `retry`, a collection `each`, and anything else taking a
+     * closure.
+     *
+     * The step becomes a `loop`, which is what the viewer calls a block with a body — both its
+     * mermaid and React renderers descend into `body` for that type and for no other, so a `call`
+     * carrying one would be dropped on the floor. A `try` block is already emitted this way for
+     * the same reason.
+     *
+     * Only the first callback is descended into: a call taking two is rare, and showing one body
+     * under one label is clearer than merging them.
+     *
+     * @param  array{type: string, label: string}  $step
+     * @param  Node\Arg[]|Node\VariadicPlaceholder[]  $args
+     * @return array<string, mixed>
+     */
+    private function withCallbackBody(array $step, array $args): array
+    {
+        foreach ($args as $arg) {
+            if (! $arg instanceof Node\Arg) {
+                continue;
+            }
+            $value = $arg->value;
+            if ($value instanceof Node\Expr\Closure) {
+                $body = $this->stmtsToSteps($value->stmts);
+            } elseif ($value instanceof Node\Expr\ArrowFunction) {
+                $body = $this->stmtsToSteps([new Node\Stmt\Expression($value->expr)]);
+            } else {
+                continue;
+            }
+
+            return $body === [] ? $step : ['type' => 'loop'] + $step + ['body' => $body];
+        }
+
+        return $step;
     }
 
     // ── Expression prettifier ─────────────────────────────────────────────────
