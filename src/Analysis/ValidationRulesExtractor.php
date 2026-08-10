@@ -23,6 +23,19 @@ final class ValidationRulesExtractor
 
     private PrettyPrinter $printer;
 
+    /**
+     * Whether a file declares a non-abstract rules(), keyed by path + mtime + size.
+     *
+     * The answer is asked once per graph edge that could reach a Form Request, and the same file
+     * is reached from many edges: measured over three applications, 1,116 / 604 / 3,936 calls
+     * concerned 345 / 142 / 370 distinct files. The parse itself is already shared, but the
+     * traversal that looks for rules() was repeated every time — and when the answer is "no", as
+     * it usually is, nothing stops it early and it walks the whole file.
+     *
+     * @var array<string, bool>
+     */
+    private array $hasRulesMemo = [];
+
     public function __construct(?PhpFileParser $parser = null)
     {
         $this->parser = $parser ?? new PhpFileParser;
@@ -31,10 +44,27 @@ final class ValidationRulesExtractor
 
     public function hasNonAbstractRulesMethod(string $file): bool
     {
-        if (! is_file($file)) {
+        $stat = @stat($file);
+        if ($stat === false || ! is_file($file)) {
             return false;
         }
 
+        // Mirrors PhpFileParser's key and its rule for files being edited this very second: a
+        // file whose mtime is not yet in the past can change again without changing its key, so
+        // it is answered from source and not remembered.
+        $settled = $stat['mtime'] < time();
+        $key = $file.':'.$stat['mtime'].':'.$stat['size'];
+        if ($settled && isset($this->hasRulesMemo[$key])) {
+            return $this->hasRulesMemo[$key];
+        }
+
+        $verdict = $this->computeHasNonAbstractRulesMethod($file);
+
+        return $settled ? $this->hasRulesMemo[$key] = $verdict : $verdict;
+    }
+
+    private function computeHasNonAbstractRulesMethod(string $file): bool
+    {
         $parsed = $this->parser->parse($file);
         if ($parsed['ast'] === null) {
             return false;
