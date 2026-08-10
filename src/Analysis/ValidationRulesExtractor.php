@@ -36,6 +36,15 @@ final class ValidationRulesExtractor
      */
     private array $hasRulesMemo = [];
 
+    /**
+     * Entry cap, enforced the way {@see PhpFileParser} enforces its own: insertion-ordered
+     * eviction of the oldest quarter. A single build cannot come near it — the most any of the
+     * three applications measured asks about is 370 distinct files. It bounds an extractor that
+     * outlives one build, where every edit mints a key and the superseded entry would otherwise
+     * stay for the life of the process.
+     */
+    private const MEMO_MAX = 8000;
+
     public function __construct(?PhpFileParser $parser = null)
     {
         $this->parser = $parser ?? new PhpFileParser;
@@ -59,8 +68,29 @@ final class ValidationRulesExtractor
         }
 
         $verdict = $this->computeHasNonAbstractRulesMethod($file);
+        if (! $settled) {
+            return $verdict;
+        }
 
-        return $settled ? $this->hasRulesMemo[$key] = $verdict : $verdict;
+        $this->evictIfFull();
+
+        return $this->hasRulesMemo[$key] = $verdict;
+    }
+
+    /** Drop the oldest quarter in one pass, rather than one entry per insert from here on. */
+    private function evictIfFull(): void
+    {
+        if (count($this->hasRulesMemo) < self::MEMO_MAX) {
+            return;
+        }
+
+        $evict = intdiv(self::MEMO_MAX, 4);
+        foreach (array_keys($this->hasRulesMemo) as $key) {
+            unset($this->hasRulesMemo[$key]);
+            if (--$evict <= 0) {
+                return;
+            }
+        }
     }
 
     private function computeHasNonAbstractRulesMethod(string $file): bool
