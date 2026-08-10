@@ -74,7 +74,9 @@ it('descends into an arrow function too', function () {
     $steps = flowFor('        \Cache::remember("k", 60, fn () => $this->repo->load());');
 
     expect($steps[0]['body'] ?? [])->toHaveCount(1)
-        ->and($steps[0]['body'][0]['label'])->toContain('load');
+        ->and($steps[0]['body'][0]['label'])->toContain('load')
+        // An implicit return, as extractFromClosure() reads the same shape.
+        ->and($steps[0]['body'][0]['type'])->toBe('return');
 });
 
 it('leaves a call without a callback exactly as it was', function () {
@@ -93,4 +95,29 @@ it('keeps the calls a closure makes visible to the flow, nested one level', func
 
     expect($steps[0]['body'] ?? [])->toHaveCount(1)
         ->and($steps[0]['body'][0]['label'])->toContain('import');
+});
+
+it('surfaces an N+1 that was hidden inside a callback', function () {
+    // A query in a foreach inside a callback was invisible, so the N+1 marker never reached it.
+    // Callback bodies are walked as not-in-a-loop, so the flag can only come from the real
+    // foreach nested within — a transaction is not itself a loop and is not counted as one.
+    $steps = flowFor('        \DB::transaction(function () {
+            foreach ($this->rows as $row) {
+                \App\Models\Thing::find($row->id);
+            }
+        });');
+
+    $inner = $steps[0]['body'][0] ?? [];
+    expect($inner['type'])->toBe('loop')
+        ->and($inner['label'])->toContain('foreach')
+        ->and($inner['body'][0]['n1'] ?? false)->toBeTrue();
+});
+
+it('does not call a callback that merely contains a query an N+1', function () {
+    $steps = flowFor('        \DB::transaction(function () {
+            \App\Models\Thing::find(1);
+        });');
+
+    expect($steps[0]['n1'] ?? false)->toBeFalse()
+        ->and($steps[0]['body'][0]['n1'] ?? false)->toBeFalse();
 });

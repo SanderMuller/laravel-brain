@@ -376,7 +376,9 @@ class FlowExtractor
             if ($value instanceof Node\Expr\Closure) {
                 $body = $this->stmtsToSteps($value->stmts);
             } elseif ($value instanceof Node\Expr\ArrowFunction) {
-                $body = $this->stmtsToSteps([new Node\Stmt\Expression($value->expr)]);
+                // An implicit return, matching how extractFromClosure() reads the same shape —
+                // otherwise one arrow function charts two ways depending on which path found it.
+                $body = $this->stmtsToSteps([new Node\Stmt\Return_($value->expr)]);
             } else {
                 continue;
             }
