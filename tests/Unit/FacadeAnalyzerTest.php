@@ -100,8 +100,8 @@ it('discovers a facade whose files open with declare(strict_types=1)', function 
 });
 
 it('still discovers a facade whose source spells the keyword EXTENDS', function () {
-    // Files with no `extends` keyword are skipped before parsing, since they cannot define a
-    // facade. PHP keywords are case-insensitive, so that test has to be too.
+    // The `extends` keyword no longer decides which files are read, but this class is still the
+    // ordinary shape a facade takes, and PHP keywords are case-insensitive.
     $root = sys_get_temp_dir().'/brain-facade-case-'.uniqid();
     mkdir($root.'/app/Support', 0o777, true);
 
@@ -126,6 +126,56 @@ it('still discovers a facade whose source spells the keyword EXTENDS', function 
     expect($registry->get('App\Support\ShoutFacade'))
         ->toBeInstanceOf(FacadeRecord::class)
         ->accessor->toBe('shout');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
+
+it('discovers a facade whose own file never mentions Facade', function () {
+    // The narrow case the prefilter cannot see and the second pass exists for. The child extends
+    // an app-level base that is *not* named `…Facade`, and imports it from a namespace segment
+    // the filter discounts — so the child's source, read as text, offers nothing at all. Only the
+    // base is admitted on the first pass; the child is reached because the base turned out to sit
+    // in the chain and the child names it.
+    $root = sys_get_temp_dir().'/brain-facade-indirect-'.uniqid();
+    mkdir($root.'/app/Support/Facades', 0o777, true);
+
+    file_put_contents($root.'/app/Support/Facades/Base.php', <<<'PHP'
+        <?php
+
+        namespace App\Support\Facades;
+
+        use Illuminate\Support\Facades\Facade;
+
+        abstract class Base extends Facade
+        {
+            protected static function getFacadeAccessor()
+            {
+                return 'reporting';
+            }
+        }
+        PHP);
+
+    file_put_contents($root.'/app/Support/Reporting.php', <<<'PHP'
+        <?php
+
+        namespace App\Support;
+
+        use App\Support\Facades\Base;
+
+        class Reporting extends Base
+        {
+        }
+        PHP);
+
+    // Guard the premise: if this file ever gains a bare `Facade` the test proves nothing.
+    $source = (string) file_get_contents($root.'/app/Support/Reporting.php');
+    expect(str_contains(str_replace('Facades\\', '', $source), 'Facade'))->toBeFalse();
+
+    $registry = (new FacadeAnalyzer)->analyze($root);
+
+    expect($registry->get('App\Support\Reporting'))
+        ->toBeInstanceOf(FacadeRecord::class)
+        ->accessor->toBe('reporting');
 
     exec('rm -rf '.escapeshellarg($root));
 });

@@ -119,7 +119,14 @@ final class FacadeAnalyzer
     /**
      * A file that never names Facade cannot extend it directly. The keyword `extends` used to
      * stand in for this and admitted most of a codebase — 81% of the files of one application
-     * measured here — where naming the class admits 8%.
+     * measured here.
+     *
+     * Naming the class is the real test, but `Facade` on its own is not that test: the import
+     * `use Illuminate\Support\Facades\Log;` contains it, and most files in a Laravel application
+     * carry a line like that. Dropping the framework's `Facades\` path segment first leaves the
+     * bare mention that only a file defining or extending a facade has — 22% of one application
+     * admitted down to 1%, and the base class itself survives, since
+     * `Illuminate\Support\Facades\Facade` still reads `Illuminate\Support\Facade` afterwards.
      *
      * On its own this misses a facade that reaches the base through an app-level intermediate;
      * {@see analyze()} closes that with a second pass rather than assuming it away.
@@ -130,7 +137,7 @@ final class FacadeAnalyzer
 
         // Case-sensitive, unlike the `extends` keyword this replaced: `Facade` is a class name,
         // and PHP class names are matched case-sensitively by the autoloader in practice.
-        return $code !== false && str_contains($code, 'Facade');
+        return $code !== false && str_contains(str_replace('Facades\\', '', $code), 'Facade');
     }
 
     private function scanFile(string $file, FacadeRegistry $registry): void
