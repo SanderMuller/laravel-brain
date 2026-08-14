@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis\Incremental;
 
+use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
 use LaraMint\LaravelBrain\Graph\Graph;
 
 /**
@@ -34,6 +35,13 @@ use LaraMint\LaravelBrain\Graph\Graph;
  */
 final class GraphProvenance
 {
+    /**
+     * realpath() of each key in {@see $byFile} => that key, built on the first lookup that misses.
+     *
+     * @var array<string, string>|null
+     */
+    private ?array $resolvedKeys = null;
+
     /**
      * @param  array<string, array{nodes: string[], edges: string[]}>  $byFile
      * @param  array<string, string>  $nodeFile  nodeId => owning file
@@ -75,7 +83,7 @@ final class GraphProvenance
     {
         $ids = [];
         foreach ($files as $f) {
-            foreach ($this->byFile[$f]['nodes'] ?? [] as $id) {
+            foreach ($this->byFile[$this->recordedKey($f)]['nodes'] ?? [] as $id) {
                 $ids[] = $id;
             }
         }
@@ -88,11 +96,51 @@ final class GraphProvenance
     {
         $ids = [];
         foreach ($files as $f) {
-            foreach ($this->byFile[$f]['edges'] ?? [] as $id) {
+            foreach ($this->byFile[$this->recordedKey($f)]['edges'] ?? [] as $id) {
                 $ids[] = $id;
             }
         }
 
         return array_values(array_unique($ids));
+    }
+
+    /**
+     * The key the build recorded for this file, or the path unchanged when nothing matches it.
+     *
+     * `byFile` is keyed on `data.file` exactly as the analysis wrote it: the project root the
+     * caller passed, with a relative path appended. A caller that normalises its own paths first
+     * — `realpath()` is the obvious thing to reach for, and on macOS it rewrites `/var` to
+     * `/private/var` — would otherwise name the right file in a form nothing here recognises and
+     * silently own nothing at all. The controller filter in {@see ProjectAnalyzer::analyze()}
+     * already resolves both sides of its match; this makes the ownership lookup agree with it.
+     *
+     * Resolved lazily, and only after a verbatim lookup misses, so the case that always hits —
+     * the paths a build produced itself, which is every path watch mode passes — costs nothing.
+     */
+    private function recordedKey(string $file): string
+    {
+        if (isset($this->byFile[$file])) {
+            return $file;
+        }
+
+        $real = realpath($file);
+        if ($real === false) {
+            return $file;
+        }
+
+        if ($this->resolvedKeys === null) {
+            $this->resolvedKeys = [];
+            foreach (array_keys($this->byFile) as $known) {
+                if ($known === '') {
+                    continue;
+                }
+                $knownReal = realpath($known);
+                if ($knownReal !== false) {
+                    $this->resolvedKeys[$knownReal] = $known;
+                }
+            }
+        }
+
+        return $this->resolvedKeys[$real] ?? $file;
     }
 }
