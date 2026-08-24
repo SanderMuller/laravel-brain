@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis;
 
+use LaraMint\LaravelBrain\Parser\PhpExtendsFqcnResolver;
 use LaraMint\LaravelBrain\Parser\PhpFileParser;
 use PhpParser\Node;
 use PhpParser\NodeTraverser;
@@ -105,6 +106,14 @@ class SecurityAnalyzer
 
     /** @var array<string, list<array<string, mixed>>>|null */
     private ?array $externalByFile = null;
+
+    /**
+     * Memoised result of {@see self::isAuthClass()} keyed by FQCN, so each
+     * middleware class's `extends` chain is walked at most once per scan.
+     *
+     * @var array<string, bool>
+     */
+    private array $authClassCache = [];
 
     /**
      * Effective auth-middleware patterns (defaults + $extraAuthPatterns),
@@ -281,9 +290,16 @@ class SecurityAnalyzer
                 return 'admin';
             }
         }
-        // Auth check
+        // Auth check — pattern/basename match OR a verified `extends
+        // Authenticate` chain. The chain walk catches a custom guard whose
+        // class name doesn't contain "auth" (e.g. `auth.customer` mapped to
+        // App\Http\Middleware\AuthenticateCustomer), which basename matching
+        // against the framework `Authenticate` alone would miss.
         foreach ($middlewares as $mw) {
             if ($this->middlewareMatches($mw, $this->authPatterns)) {
+                return 'authed';
+            }
+            if ($this->isAuthClass($this->middlewareClass($mw))) {
                 return 'authed';
             }
         }
@@ -593,6 +609,94 @@ class SecurityAnalyzer
         $pos = strrpos($name, '\\');
 
         return strtolower($pos === false ? $name : substr($name, $pos + 1));
+    }
+
+    /**
+     * The class/alias part of a resolved middleware string, stripped of any
+     * `:params` suffix. The registry has already resolved aliases to FQCNs,
+     * so this is usually a class name.
+     */
+    private function middlewareClass(string $middleware): string
+    {
+        return explode(':', $middleware, 2)[0];
+    }
+
+    /**
+     * True when $fqcn is the framework's Authenticate middleware or any class
+     * whose `extends` chain reaches it. Results are memoised per scan so each
+     * FQCN is walked at most once.
+     */
+    private function isAuthClass(string $fqcn): bool
+    {
+        $fqcn = ltrim($fqcn, '\\');
+        if ($fqcn === '') {
+            return false;
+        }
+        if (isset($this->authClassCache[$fqcn])) {
+            return $this->authClassCache[$fqcn];
+        }
+        if ($fqcn === 'Illuminate\\Auth\\Middleware\\Authenticate') {
+            return $this->authClassCache[$fqcn] = true;
+        }
+
+        // Seed the memo *before* recursing so a cyclic `extends` chain (two
+        // classes that extend each other — only possible with a broken class
+        // Brain can't execute) terminates instead of exhausting memory and
+        // taking the whole scan down. The real result overwrites this below.
+        $this->authClassCache[$fqcn] = false;
+
+        $parent = $this->resolveParentClass($fqcn);
+        if ($parent === null) {
+            return false;
+        }
+
+        return $this->authClassCache[$fqcn] = $this->isAuthClass($parent);
+    }
+
+    /**
+     * Best-effort: parse the file declaring $fqcn (PSR-4 convention) and
+     * return the FQCN of its `extends` clause, or null when the file can't be
+     * found or the class doesn't extend anything we can resolve.
+     */
+    private function resolveParentClass(string $fqcn): ?string
+    {
+        $file = $this->locateClassFile($fqcn);
+        if ($file === null) {
+            return null;
+        }
+
+        $parsed = $this->cachedParse($file);
+        if (($parsed['ast'] ?? null) === null) {
+            return null;
+        }
+
+        $namespace = PhpExtendsFqcnResolver::namespaceFromAst($parsed['ast']);
+        $useMap = $parsed['useMap'] ?? [];
+
+        $parent = null;
+        $traverser = new NodeTraverser;
+        $traverser->addVisitor(new class($parent, $namespace, $useMap) extends NodeVisitorAbstract
+        {
+            public function __construct(public ?string &$parent, private string $namespace, private array $useMap) {}
+
+            public function enterNode(Node $node): ?int
+            {
+                if ($node instanceof Node\Stmt\Class_ && $node->extends !== null) {
+                    $this->parent = PhpExtendsFqcnResolver::resolveExtends(
+                        $node->extends,
+                        $this->namespace,
+                        $this->useMap,
+                    );
+
+                    return NodeTraverser::STOP_TRAVERSAL;
+                }
+
+                return null;
+            }
+        });
+        $traverser->traverse($parsed['ast']);
+
+        return $parent;
     }
 
     /**
