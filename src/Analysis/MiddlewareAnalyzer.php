@@ -185,13 +185,33 @@ class MiddlewareAnalyzer
 
             private function extractAliases(Node\Expr\MethodCall $node): void
             {
-                if (count($node->args) >= 2) {
-                    $alias = $node->args[0]->value instanceof Node\Scalar\String_
-                        ? $node->args[0]->value->value
-                        : null;
+                if (count($node->args) === 0) {
+                    return;
+                }
+
+                // Form A: `$middleware->alias('key', Class::class)`
+                if (count($node->args) >= 2 && $node->args[0]->value instanceof Node\Scalar\String_) {
+                    $alias = $node->args[0]->value->value;
                     $class = $this->extractClassString($node->args[1]->value);
-                    if ($alias && $class) {
+                    if ($alias !== '' && $class !== null) {
                         $this->aliases[$alias] = $class;
+                    }
+
+                    return;
+                }
+
+                // Form B: `$middleware->alias(['key' => Class::class, ...])`
+                // This is the form Laravel's docs and the bootstrap/app.php
+                // skeleton use, so most real apps register custom aliases this way.
+                if ($node->args[0]->value instanceof Node\Expr\Array_) {
+                    foreach ($node->args[0]->value->items as $item) {
+                        if (! $item || ! ($item->key instanceof Node\Scalar\String_)) {
+                            continue;
+                        }
+                        $class = $this->extractClassString($item->value);
+                        if ($class !== null) {
+                            $this->aliases[$item->key->value] = $class;
+                        }
                     }
                 }
             }
