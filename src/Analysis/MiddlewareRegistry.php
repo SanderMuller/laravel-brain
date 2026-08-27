@@ -4,8 +4,6 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis;
 
-use Illuminate\Routing\MiddlewareNameResolver;
-
 class MiddlewareRegistry
 {
     public function __construct(
@@ -31,7 +29,9 @@ class MiddlewareRegistry
      * how a route behind `api` — a group an application may well have put `auth` in — is taken for
      * an unguarded one. Expanding it is what lets a caller see the guard that is really there.
      *
-     * Follows Laravel's own resolution order, from {@see MiddlewareNameResolver}:
+     * Follows Laravel's own resolution order, from `Illuminate\Routing\MiddlewareNameResolver` —
+     * named in prose rather than linked, because the style pass turns a `{@see}` into an import and
+     * this package requires `illuminate/console` and `illuminate/support`, not `illuminate/routing`:
      *
      * - A group wins over an alias of the same name, and is matched on the whole name, so
      *   `web:something` is not the `web` group.
