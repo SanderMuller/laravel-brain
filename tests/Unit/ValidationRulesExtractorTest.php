@@ -102,3 +102,81 @@ it('remembers that a file has no rules(), not just that it has one', function ()
 
     unlink($file);
 });
+
+it('answers identically for source handed over and for the file it came from', function () {
+    // Driving both variants from one fixture is what stops them drifting: a change that reaches
+    // only one of them fails here. The rows themselves are pinned by the file-variant test above,
+    // so this asserts equality rather than restating them.
+    $file = fixture('/laravel-project/app/Http/Requests/ProfileStoreRequest.php');
+    $code = (string) file_get_contents($file);
+    $extractor = new ValidationRulesExtractor;
+
+    expect($extractor->hasNonAbstractRulesMethodInCode($code))
+        ->toBe($extractor->hasNonAbstractRulesMethod($file))
+        ->toBeTrue()
+        ->and($extractor->extractFromCode($code))->toBe($extractor->extractFromFile($file))
+        ->toBeNonEmptyArray();
+});
+
+it('reads source that never was a file', function () {
+    // The point of the entry point: a caller holding source with no path to hand over.
+    $extractor = new ValidationRulesExtractor;
+
+    $rows = $extractor->extractFromCode(<<<'PHP'
+        <?php
+
+        namespace App\Http\Requests;
+
+        class InMemoryRequest extends FormRequest
+        {
+            public function rules()
+            {
+                return ['title' => 'required|string'];
+            }
+        }
+        PHP);
+
+    expect($rows)->toBe([['field' => "'title'", 'rules' => "'required|string'"]]);
+});
+
+it('says no rather than throwing when the source does not parse', function () {
+    $extractor = new ValidationRulesExtractor;
+
+    expect($extractor->hasNonAbstractRulesMethodInCode('<?php class Broken {'))->toBeFalse()
+        ->and($extractor->extractFromCode('<?php class Broken {'))->toBe([])
+        ->and($extractor->hasNonAbstractRulesMethodInCode(''))->toBeFalse()
+        ->and($extractor->extractFromCode(''))->toBe([]);
+});
+
+it('does not mistake an abstract rules() for one it can read', function () {
+    // The file variant has always drawn this line; the code variant has to draw it in the same
+    // place, and it is the one branch of the shared path a happy-path test never reaches.
+    $extractor = new ValidationRulesExtractor;
+
+    $code = <<<'PHP'
+        <?php
+
+        abstract class BaseRequest
+        {
+            abstract public function rules();
+        }
+        PHP;
+
+    expect($extractor->hasNonAbstractRulesMethodInCode($code))->toBeFalse()
+        ->and($extractor->extractFromCode($code))->toBe([]);
+});
+
+it('separates a rules() it cannot read from no rules() at all', function () {
+    // Empty rows are not absence. A rules() with nothing readable in it answers true to the one
+    // question and [] to the other, and a caller that collapses the two loses the distinction
+    // between "no validation here" and "validation this cannot enumerate".
+    $extractor = new ValidationRulesExtractor;
+
+    $unreadable = '<?php class Unreadable { public function rules() { $rules = []; } }';
+    $absent = '<?php class Absent { public function other() { return []; } }';
+
+    expect($extractor->hasNonAbstractRulesMethodInCode($unreadable))->toBeTrue()
+        ->and($extractor->extractFromCode($unreadable))->toBe([])
+        ->and($extractor->hasNonAbstractRulesMethodInCode($absent))->toBeFalse()
+        ->and($extractor->extractFromCode($absent))->toBe([]);
+});
