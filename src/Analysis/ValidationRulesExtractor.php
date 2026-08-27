@@ -51,6 +51,13 @@ final class ValidationRulesExtractor
         $this->printer = new PrettyPrinter;
     }
 
+    /**
+     * Asking about a path goes through the memo above and, under it,
+     * {@see PhpFileParser::parse()} and the parse cache it shares with every other analyzer. Do
+     * not reroute this through the code variant below: `parseCode()` has neither, so a path
+     * handed to it is re-read and re-parsed on every call, and this question is asked thousands
+     * of times in a build.
+     */
     public function hasNonAbstractRulesMethod(string $file): bool
     {
         $stat = @stat($file);
@@ -95,17 +102,42 @@ final class ValidationRulesExtractor
 
     private function computeHasNonAbstractRulesMethod(string $file): bool
     {
-        $parsed = $this->parser->parse($file);
-        if ($parsed['ast'] === null) {
+        return $this->hasRulesMethodInAst($this->parser->parse($file)['ast']);
+    }
+
+    /**
+     * The same question, asked about source held in memory: a git blob, an unsaved editor buffer,
+     * or a file the caller has already read.
+     *
+     * Source is parsed on each call, with no cache or memo behind it, so asking this and then
+     * {@see extractFromCode()} about the same string parses it twice.
+     *
+     * They are not interchangeable, which is the reason to pay for both when you need both: a
+     * `rules()` that exists but yields nothing readable — one with no `return`, say — answers
+     * true here and `[]` there. Empty rows mean "nothing enumerable", not "no rules() method".
+     */
+    public function hasNonAbstractRulesMethodInCode(string $code): bool
+    {
+        return $this->hasRulesMethodInAst($this->parser->parseCode($code)['ast']);
+    }
+
+    /**
+     * @param  Stmt[]|null  $ast
+     */
+    private function hasRulesMethodInAst(?array $ast): bool
+    {
+        if ($ast === null) {
             return false;
         }
 
-        $method = $this->findRulesMethod($parsed['ast']);
+        $method = $this->findRulesMethod($ast);
 
         return $method !== null && ! $method->isAbstract();
     }
 
     /**
+     * Parses through the shared cache, for the reason given on {@see hasNonAbstractRulesMethod()}.
+     *
      * @return list<RuleRow>
      */
     public function extractFromFile(string $file): array
@@ -114,12 +146,28 @@ final class ValidationRulesExtractor
             return [];
         }
 
-        $parsed = $this->parser->parse($file);
-        if ($parsed['ast'] === null) {
+        return $this->extractFromAst($this->parser->parse($file)['ast']);
+    }
+
+    /**
+     * @return list<RuleRow>
+     */
+    public function extractFromCode(string $code): array
+    {
+        return $this->extractFromAst($this->parser->parseCode($code)['ast']);
+    }
+
+    /**
+     * @param  Stmt[]|null  $ast
+     * @return list<RuleRow>
+     */
+    private function extractFromAst(?array $ast): array
+    {
+        if ($ast === null) {
             return [];
         }
 
-        $method = $this->findRulesMethod($parsed['ast']);
+        $method = $this->findRulesMethod($ast);
         if ($method === null || $method->isAbstract()) {
             return [];
         }
