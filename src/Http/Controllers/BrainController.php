@@ -10,6 +10,7 @@ use Illuminate\Http\Response;
 use Illuminate\Routing\Controller;
 use LaraMint\LaravelBrain\Ai\ContextExporter;
 use LaraMint\LaravelBrain\Ai\RulesExporter;
+use LaraMint\LaravelBrain\Ai\UsageFinder;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
 use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
@@ -102,6 +103,37 @@ class BrainController extends Controller
             : 'text/markdown; charset=utf-8';
 
         return response($output, 200, ['Content-Type' => $contentType]);
+    }
+
+    // ── Usages ────────────────────────────────────────────────────────────────
+
+    public function usages(Request $request): JsonResponse
+    {
+        $store = GraphStoreFactory::make();
+
+        if (! $store->hasManifest()) {
+            return response()->json([
+                'error' => 'No scan data found — run php artisan brain:scan first',
+            ], 404);
+        }
+
+        $nodeId = (string) $request->query('nodeId', '');
+
+        if ($nodeId === '') {
+            return response()->json(['error' => 'nodeId is required'], 422);
+        }
+
+        try {
+            $result = UsageFinder::find($store, $nodeId);
+        } catch (\RuntimeException $e) {
+            return response()->json(['error' => $e->getMessage()], 400);
+        }
+
+        if ($result === null) {
+            return response()->json(['error' => "Node not found: {$nodeId}"], 404);
+        }
+
+        return response()->json($result);
     }
 
     // ── AI rules generation ───────────────────────────────────────────────────

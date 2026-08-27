@@ -5,6 +5,7 @@ import { FlowchartView } from './FlowchartView'
 import { FlowchartModal } from './FlowchartModal'
 import { SourceView } from './SourceView'
 import { SourceModal } from './SourceModal'
+import { UsagesView } from './UsagesView'
 import { StressTestPanel } from './StressTestPanel'
 import { SequenceDiagramView } from './SequenceDiagramView'
 import { SequenceDiagramModal } from './SequenceDiagramModal'
@@ -53,7 +54,7 @@ const TYPE_COLORS: Record<string, string> = {
   filament_relation_manager: '#0891B2',
 }
 
-type TabId = 'info' | 'risks' | 'flow' | 'source' | 'edges' | 'stress'
+type TabId = 'info' | 'risks' | 'flow' | 'source' | 'edges' | 'usages' | 'stress'
 
 export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange }: Props) {
   const [width, setWidth] = useState(DEFAULT_WIDTH)
@@ -275,6 +276,7 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
     ...(isRoute ? [{ id: 'risks' as TabId, label: 'Risks', count: securityIssueCount || undefined, alert: securityIssueCount > 0, title: 'Security findings: exposure level, authentication, rate-limiting, mass-assignment, and unvalidated input risks.' }] : []),
     ...(hasFlow ? [{ id: 'flow' as TabId, label: 'Flow', title: 'Control-flow steps through this method or request (and sequence diagram for routes).' }] : []),
     ...(hasEdges ? [{ id: 'edges' as TabId, label: 'Edges', count: incomingEdges.length + outgoingEdges.length, title: 'What calls or references this node (incoming) and what it calls (outgoing).' }] : []),
+    { id: 'usages', label: 'Usages', title: 'Where this symbol is referenced across the whole project, grouped by file.' },
     ...(hasSource ? [{ id: 'source' as TabId, label: 'Source', title: 'Syntax-highlighted PHP source around this symbol.' }] : []),
     ...(isRoute ? [{ id: 'stress' as TabId, label: 'Stress', title: 'Send HTTP requests against this route and inspect responses (dev only).' }] : []),
   ]
@@ -750,6 +752,11 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                 </div>
               )}
             </>
+          )}
+
+          {/* ── Usages tab ── */}
+          {safeTab === 'usages' && selectedId && (
+            <UsagesView nodeId={selectedId} />
           )}
 
           {/* ── Security tab ── */}
