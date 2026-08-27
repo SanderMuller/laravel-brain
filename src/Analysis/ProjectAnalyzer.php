@@ -161,6 +161,49 @@ class ProjectAnalyzer
         return $this;
     }
 
+    /**
+     * Refuse a scope that cannot name anything the previous graph owns, before any work is done.
+     *
+     * The soundness check below compares what the scope owns in the previous graph against what
+     * it owns in the fresh one. A scope naming nothing owns nothing in both, and two empty sets
+     * compare equal — so the check approves it, the merge substitutes nothing, and the previous
+     * graph is returned as though it were current. The less such a scope matches, the more
+     * confidently it passes.
+     *
+     * Path *form* is no longer a way into that: {@see GraphProvenance} resolves a caller's paths
+     * against the ones a build recorded. What is left is a path that names no file in this
+     * project at all — deleted since the previous run, from another checkout, or simply a typo —
+     * and there is no reading of that a previous graph can answer, so it is refused.
+     *
+     * A file that exists here but owns nothing is a different case and stays on the fast path.
+     * It is most of `app/` — 45% to 86% of it across the applications measured — because the
+     * graph only holds what an entry point reaches, and an edit to a file nothing reaches cannot
+     * change it without an edit to its caller, which would be in the scope and does own
+     * provenance.
+     *
+     * @param  string[]|null  $scopeToFiles
+     *
+     * @throws ScopedRebuildNotApplicable
+     */
+    private function assertScopeIsUsable(?array $scopeToFiles, string $projectRoot): void
+    {
+        if ($scopeToFiles === null) {
+            return;
+        }
+
+        $root = realpath($projectRoot);
+        if ($root === false || $scopeToFiles === []) {
+            throw new ScopedRebuildNotApplicable;
+        }
+
+        foreach ($scopeToFiles as $file) {
+            $real = realpath($file);
+            if ($real === false || ! is_file($real) || ! str_starts_with($real, $root.DIRECTORY_SEPARATOR)) {
+                throw new ScopedRebuildNotApplicable;
+            }
+        }
+    }
+
     public function analyze(string $projectRoot, ?callable $onProgress = null): AnalysisResult
     {
         if ($onProgress !== null) {
@@ -183,6 +226,7 @@ class ProjectAnalyzer
         $scopeToFiles = $this->scopeToFiles;
         $mergeInto = $this->mergeInto;
         $this->scopeToFiles = null;
+        $this->assertScopeIsUsable($scopeToFiles, $projectRoot);
         $this->mergeInto = null;
 
         $this->emit('step:start', ['step' => 'routes', 'label' => 'Scanning routes', 'message' => '  → Scanning routes...']);
