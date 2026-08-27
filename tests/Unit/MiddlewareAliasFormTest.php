@@ -46,3 +46,40 @@ it('does not crash on the first-class callable $middleware->alias(...) form', fu
     expect($registry->aliases)->not->toHaveKey('...')
         ->and($registry->aliases)->toHaveKey('auth.named');
 });
+
+// =============================================================================
+// Group declarations in a Laravel 11+ bootstrap/app.php. `web` and `api` are
+// modified through their own methods; every other group an application has is
+// declared with group(), and added to with appendToGroup()/prependToGroup().
+// =============================================================================
+
+it('reads a group declared with $middleware->group()', function () {
+    $registry = (new MiddlewareAnalyzer)->analyze(fixture('middleware-group-declarations'));
+
+    expect($registry->resolveGroup('admin'))->toContain('App\\Http\\Middleware\\AuthenticateCustomer')
+        ->and($registry->resolveGroup('admin'))->toContain('can:administer');
+});
+
+it('appends and prepends to a declared group in the right order', function () {
+    $registry = (new MiddlewareAnalyzer)->analyze(fixture('middleware-group-declarations'));
+
+    expect($registry->resolveGroup('admin'))->toBe([
+        'App\\Http\\Middleware\\EnsureTenantMatches',
+        'App\\Http\\Middleware\\AuthenticateCustomer',
+        'can:administer',
+        'App\\Http\\Middleware\\ThrottleAdmin',
+    ]);
+});
+
+it('accepts a bare class string, which Laravel wraps for the caller', function () {
+    // `prependToGroup('admin', EnsureTenantMatches::class)` takes array|string.
+    $registry = (new MiddlewareAnalyzer)->analyze(fixture('middleware-group-declarations'));
+
+    expect($registry->resolveGroup('admin')[0])->toBe('App\\Http\\Middleware\\EnsureTenantMatches');
+});
+
+it('records a group that only ever had members added to it', function () {
+    $registry = (new MiddlewareAnalyzer)->analyze(fixture('middleware-group-declarations'));
+
+    expect($registry->resolveGroup('tenant'))->toBe(['App\\Http\\Middleware\\LogRequest']);
+});
