@@ -18,17 +18,36 @@ class MiddlewareAnalyzer
         $this->parser = new PhpFileParser;
     }
 
+    /**
+     * Which of the two files an application configures middleware in decides
+     * which one is read — not which of them happens to be on disk.
+     *
+     * `bootstrap/app.php` exists in every Laravel application, on both sides of
+     * the 11.0 boundary; what distinguishes the modern one is the
+     * `->withMiddleware(...)` call. So it is asked first and answers only when
+     * it holds that call, which is why a Laravel 10 application still reads its
+     * Kernel: its bootstrap file configures no middleware and declines.
+     *
+     * The case this exists for is an application upgraded to 11+ that kept
+     * `app/Http/Kernel.php` behind. Laravel does not read that file any more,
+     * and neither should this: reading it because it exists returned the stale
+     * or empty registry of a file the framework ignores, while the aliases and
+     * groups the application really registers sat unread in `bootstrap/app.php`.
+     */
     public function analyze(string $projectRoot): MiddlewareRegistry
     {
         $kernelPath = $projectRoot.'/app/Http/Kernel.php';
         $bootstrapPath = $projectRoot.'/bootstrap/app.php';
 
-        if (file_exists($kernelPath)) {
-            return $this->analyzeLaravel10($kernelPath);
+        if (file_exists($bootstrapPath)) {
+            $bootstrap = $this->analyzeLaravel11($bootstrapPath);
+            if ($bootstrap instanceof MiddlewareRegistry) {
+                return $bootstrap;
+            }
         }
 
-        if (file_exists($bootstrapPath)) {
-            return $this->analyzeLaravel11($bootstrapPath);
+        if (file_exists($kernelPath)) {
+            return $this->analyzeLaravel10($kernelPath);
         }
 
         return new MiddlewareRegistry([], [], []);
@@ -133,11 +152,23 @@ class MiddlewareAnalyzer
         return new MiddlewareRegistry($visitor->global, $visitor->groups, $visitor->aliases);
     }
 
-    private function analyzeLaravel11(string $bootstrapPath): MiddlewareRegistry
+    /**
+     * The registry `bootstrap/app.php` declares, or null when it declares none —
+     * meaning the file carries no `->withMiddleware(...)` call, which is every
+     * pre-11 bootstrap file and tells {@see analyze()} to read the Kernel.
+     *
+     * Null is not the same answer as an empty registry, and the difference is
+     * load-bearing: `->withMiddleware(function ($middleware) {
+     * $middleware->redirectGuestsTo('/login'); })` registers no alias and no
+     * group, yet it is still the file this application configures middleware
+     * in. An empty registry from here is that application; null is a file that
+     * never had an opinion.
+     */
+    private function analyzeLaravel11(string $bootstrapPath): ?MiddlewareRegistry
     {
         $parsed = $this->parser->parse($bootstrapPath);
         if ($parsed['ast'] === null) {
-            return new MiddlewareRegistry([], [], []);
+            return null;
         }
 
         $traverser = new NodeTraverser;
@@ -146,6 +177,8 @@ class MiddlewareAnalyzer
             public array $groups = [];
 
             public array $aliases = [];
+
+            public bool $configuresMiddleware = false;
 
             private array $useMap;
 
@@ -160,6 +193,10 @@ class MiddlewareAnalyzer
                     return null;
                 }
                 $methodName = $node->name instanceof Node\Identifier ? $node->name->toString() : null;
+
+                if ($methodName === 'withMiddleware') {
+                    $this->configuresMiddleware = true;
+                }
 
                 if (in_array($methodName, ['api', 'web'], true)) {
                     $this->groups[$methodName] = $this->extractAppendList($node);
@@ -255,6 +292,10 @@ class MiddlewareAnalyzer
 
         $traverser->addVisitor($visitor);
         $traverser->traverse($parsed['ast']);
+
+        if (! $visitor->configuresMiddleware) {
+            return null;
+        }
 
         return new MiddlewareRegistry([], $visitor->groups, $visitor->aliases);
     }
