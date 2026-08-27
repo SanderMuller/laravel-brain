@@ -84,8 +84,15 @@ function writeScopedSource(string $path, string $code): void
     static $age = 900;
 
     file_put_contents($path, $code);
+
+    // A distinct mtime for every write, each one further into the past. The parse cache keys on
+    // path + mtime + size, and two versions of one file are readily the same size — `run` and
+    // `log` differ by no bytes — so a repeated mtime hands the second version's build the first
+    // version's parse. The age used to walk toward the present and stop 10 seconds short of it,
+    // which collided as soon as a run made enough writes to get there; walking the other way
+    // cannot, and never reaches the present, which the cache treats as unsettled.
     touch($path, time() - $age);
-    $age = max(10, $age - 30);
+    $age++;
     clearstatcache(true, $path);
 }
 
