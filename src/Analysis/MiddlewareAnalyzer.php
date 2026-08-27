@@ -185,7 +185,13 @@ class MiddlewareAnalyzer
 
             private function extractAliases(Node\Expr\MethodCall $node): void
             {
-                if (count($node->args) === 0) {
+                // First-class callable syntax `$middleware->alias(...)` puts a
+                // VariadicPlaceholder (no `->value`) in args[0]. Reading it would
+                // raise a warning that Laravel's HandleExceptions turns into an
+                // ErrorException, killing the scan — so bail unless args[0] is a
+                // real Node\Arg. Matches the guard used across MethodTracer /
+                // FlowExtractor.
+                if (count($node->args) === 0 || ! $node->args[0] instanceof Node\Arg) {
                     return;
                 }
 

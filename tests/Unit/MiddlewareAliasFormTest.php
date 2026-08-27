@@ -28,3 +28,21 @@ it('still extracts the two-argument $middleware->alias(key, class) form', functi
         ->toHaveKey('legacy.guard')
         ->and($registry->aliases['legacy.guard'])->toBe('App\\Http\\Middleware\\LegacyGuard');
 });
+
+it('registers the named-argument $middleware->alias(aliases: [...]) form', function () {
+    $registry = (new MiddlewareAnalyzer)->analyze(fixture('middleware-alias-edge-cases'));
+
+    expect($registry->aliases)
+        ->toHaveKey('auth.named')
+        ->and($registry->aliases['auth.named'])->toBe('App\\Http\\Middleware\\AuthenticateNamed');
+});
+
+it('does not crash on the first-class callable $middleware->alias(...) form', function () {
+    // A VariadicPlaceholder in args[0] must not raise a warning (which Laravel's
+    // HandleExceptions would turn into an ErrorException and kill the scan).
+    $registry = (new MiddlewareAnalyzer)->analyze(fixture('middleware-alias-edge-cases'));
+
+    // The callable form registers nothing; the named-arg form above still works.
+    expect($registry->aliases)->not->toHaveKey('...')
+        ->and($registry->aliases)->toHaveKey('auth.named');
+});
