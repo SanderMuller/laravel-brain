@@ -714,11 +714,21 @@ class SecurityAnalyzer
     {
         $resolved = [];
         foreach ($middlewares as $mw) {
+            // The name as it was written, resolved through the alias map exactly as before. A group
+            // name is itself something the patterns can match — `admin` is one of them — and it is
+            // what a consumer puts in `security.auth_middleware` to teach Brain about a guard it
+            // cannot see. Expanding a group must add its members, not take its name away.
+            [$alias, $params] = array_pad(explode(':', $mw, 2), 2, null);
+            $fqcn = $registry->resolveAlias($alias);
+            $resolved[] = $params !== null ? "{$fqcn}:{$params}" : $fqcn;
+
             foreach ($registry->expand($mw) as $one) {
                 $resolved[] = $one;
             }
         }
 
+        // A name that is not a group expands to itself, so the two halves above collapse back to
+        // one entry for it.
         return array_unique($resolved);
     }
 

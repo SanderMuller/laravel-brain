@@ -88,3 +88,28 @@ it('terminates on two groups that list each other', function () {
 
     expect(exposure($route, $registry))->toBe('public');
 });
+
+it('still matches a pattern against the group name itself', function () {
+    // `admin` is one of the admin patterns, and a group is a plausible thing to call `admin`.
+    // Expanding it must add what it contains, not take its own name away.
+    $route = makeSecurityRoute('POST', '/records', ['admin']);
+    $registry = new MiddlewareRegistry([], ['admin' => ['App\\Http\\Middleware\\LogRequest']], []);
+
+    expect(exposure($route, $registry))->toBe('admin');
+});
+
+it('still honours a group named in security.auth_middleware', function () {
+    // The configured escape hatch for a guard Brain cannot recognise on its own. It is matched by
+    // name, so the name has to survive expansion.
+    $route = makeSecurityRoute('POST', '/records', ['tenant']);
+    $registry = new MiddlewareRegistry([], ['tenant' => ['App\\Http\\Middleware\\LogRequest']], []);
+
+    expect(exposure($route, $registry, ['tenant']))->toBe('authed');
+});
+
+it('leaves a route behind an empty group public', function () {
+    // An empty group guards nothing, and its name matches no pattern.
+    $route = makeSecurityRoute('POST', '/records', ['api']);
+
+    expect(exposure($route, new MiddlewareRegistry([], ['api' => []], [])))->toBe('public');
+});
