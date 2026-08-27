@@ -286,6 +286,7 @@ class ProjectAnalyzer
 
         // Rebuilt per analysis, so a rescan sees files added since the previous one.
         ProjectFileIndex::clear();
+        SourceDirectories::clear();
 
         $appName = function_exists('config') ? config('app.name') : null;
         $projectName = (is_string($appName) && $appName !== '') ? $appName : 'Laravel Brain';

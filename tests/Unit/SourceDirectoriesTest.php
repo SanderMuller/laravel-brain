@@ -47,3 +47,43 @@ it('builds prefixes from the configured directories', function () {
     expect(SourceDirectories::classFilePrefixes(fixture('packaged-app'), ['packages/*/src']))
         ->toBe(['packages/billing/src/', 'packages/shipping/src/']);
 });
+
+// ── Memoisation ───────────────────────────────────────────────────────────────
+
+it('reuses a resolved glob rather than scanning the tree again', function () {
+    $dir = sys_get_temp_dir().'/lb_sd_'.bin2hex(random_bytes(6));
+    mkdir($dir.'/packages/alpha/src', 0o755, true);
+
+    SourceDirectories::clear();
+    expect(SourceDirectories::resolve($dir, ['packages/*/src']))->toBe(['packages/alpha/src']);
+
+    // Resolution sits inside per-class lookups, so re-globbing an unchanged tree thousands
+    // of times is the cost this avoids.
+    mkdir($dir.'/packages/beta/src', 0o755, true);
+    expect(SourceDirectories::resolve($dir, ['packages/*/src']))->toBe(['packages/alpha/src']);
+});
+
+it('sees a directory that appeared once the memo is cleared', function () {
+    $dir = sys_get_temp_dir().'/lb_sd_'.bin2hex(random_bytes(6));
+    mkdir($dir.'/packages/alpha/src', 0o755, true);
+
+    SourceDirectories::clear();
+    SourceDirectories::resolve($dir, ['packages/*/src']);
+
+    mkdir($dir.'/packages/beta/src', 0o755, true);
+    SourceDirectories::clear();
+
+    expect(SourceDirectories::resolve($dir, ['packages/*/src']))
+        ->toBe(['packages/alpha/src', 'packages/beta/src']);
+});
+
+it('keeps separate answers for different roots and different patterns', function () {
+    SourceDirectories::clear();
+
+    expect(SourceDirectories::resolve(fixture('packaged-app'), ['packages/*/src']))
+        ->toBe(['packages/billing/src', 'packages/shipping/src'])
+        ->and(SourceDirectories::resolve(fixture('packaged-app'), ['packages/billing/src']))
+        ->toBe(['packages/billing/src'])
+        ->and(SourceDirectories::resolve(fixture('laravel-project'), ['packages/*/src']))
+        ->toBe([]);
+});

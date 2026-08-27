@@ -1525,9 +1525,8 @@ class GraphBuilder
 
             // A namespace hint is bound to its directory at runtime, by whichever provider
             // registered it, so it cannot be mapped to a path in general. What is left is
-            // the file name: prefer a root whose own path carries the hint, then settle for
-            // any root that has the template.
-            return $this->firstExistingView($root, $viewRoots, $rel, $hint);
+            // the file name, and a hint that names one of the roots.
+            return $this->uniqueExistingView($root, $viewRoots, $rel, $hint);
         }
 
         $rel = $bladeRel($viewDot);
@@ -1541,37 +1540,66 @@ class GraphBuilder
             }
         }
 
-        return $this->firstExistingView($root, $viewRoots, $rel);
+        return $this->uniqueExistingView($root, $viewRoots, $rel);
     }
 
     /**
+     * The one view root that holds a template, or null when more than one does.
+     *
+     * Two roots with the same relative template have no single right answer, and picking by
+     * array order produces a confidently wrong edge — worse to read, in a graph answering
+     * "what renders this?", than an edge that is simply absent. A hint settles it only when
+     * it names exactly one of the roots.
+     *
      * @param  string[]  $viewRoots  relative to the project root
      */
-    private function firstExistingView(string $root, array $viewRoots, string $rel, ?string $hint = null): ?string
+    private function uniqueExistingView(string $root, array $viewRoots, string $rel, ?string $hint = null): ?string
     {
-        $fallback = null;
+        $matches = [];
 
         foreach ($viewRoots as $viewRoot) {
             $candidate = $root.'/'.trim($viewRoot, '/').'/'.$rel;
-            if (! is_file($candidate)) {
-                continue;
+            if (is_file($candidate)) {
+                $matches[$viewRoot] = $candidate;
             }
-
-            if ($hint === null) {
-                return $candidate;
-            }
-
-            $needle = str_replace('_', '-', Str::kebab($hint));
-            foreach (explode('-', $needle) as $segment) {
-                if ($segment !== '' && str_contains($viewRoot, '/'.$segment.'/')) {
-                    return $candidate;
-                }
-            }
-
-            $fallback ??= $candidate;
         }
 
-        return $fallback;
+        if ($matches === []) {
+            return null;
+        }
+
+        if ($hint !== null) {
+            $named = array_filter(
+                $matches,
+                fn (string $viewRoot): bool => $this->viewRootCarriesHint($viewRoot, $hint),
+                ARRAY_FILTER_USE_KEY,
+            );
+
+            if (count($named) === 1) {
+                return reset($named);
+            }
+        }
+
+        return count($matches) === 1 ? reset($matches) : null;
+    }
+
+    /**
+     * Whether a view root is named after a namespace hint.
+     *
+     * Whole path segments only: a substring test accepts `packages/billing` for a hint of
+     * `billing-pro`. A namespace is conventionally `<vendor>-<package>` while the directory
+     * carries the package alone, so that one spelling is tried too.
+     */
+    private function viewRootCarriesHint(string $viewRoot, string $hint): bool
+    {
+        $hint = Str::kebab($hint);
+        $names = [$hint];
+
+        if (str_contains($hint, '-')) {
+            $names[] = substr($hint, strpos($hint, '-') + 1);
+        }
+
+        return array_intersect($names, explode('/', trim($viewRoot, '/'))) !== [];
     }
 
     /**

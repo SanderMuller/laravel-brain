@@ -115,6 +115,10 @@ class ScanCommand extends Command
 
     private function collectMtimes(string $projectPath): array
     {
+        // A poll is exactly when a directory may have appeared, so the resolved-directory
+        // memo cannot be carried across one.
+        SourceDirectories::clear();
+
         $mtimes = [];
 
         foreach (SourceDirectories::resolve($projectPath, $this->watchPaths()) as $dir) {
