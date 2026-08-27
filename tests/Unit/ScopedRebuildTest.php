@@ -5,6 +5,7 @@ declare(strict_types=1);
 use Illuminate\Config\Repository;
 use Illuminate\Container\Container;
 use LaraMint\LaravelBrain\Analysis\Incremental\GraphProvenance;
+use LaraMint\LaravelBrain\Analysis\Incremental\IncrementalMerge;
 use LaraMint\LaravelBrain\Analysis\Incremental\ScopedRebuildNotApplicable;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
 use LaraMint\LaravelBrain\Graph\Graph;
@@ -238,4 +239,120 @@ it('still rebuilds scoped for a file the graph attributes nothing to', function 
     $scoped = buildScoped($this->root, [$unreached], $previous);
 
     expect(edgeSignature($scoped))->toBe(edgeSignature(buildFull($this->root)));
+});
+
+// =============================================================================
+// A changed file that declares no controller. The scoped pass traces controllers,
+// so such a file is rebuilt only through the chains that reach it — and until it
+// is, the soundness check above compares the previous build's owned edges against
+// nothing at all.
+// =============================================================================
+
+/** The service, with a body that calls `helper()` or does not. */
+function publisherCalling(bool $callsHelper): string
+{
+    $body = $callsHelper ? 'return $this->helper();' : 'return 1;';
+
+    return <<<PHP
+        <?php
+
+        namespace App\Services;
+
+        class Publisher
+        {
+            public function run()
+            {
+                {$body}
+            }
+
+            public function helper()
+            {
+                return 2;
+            }
+
+            public function log()
+            {
+                return 'logged';
+            }
+        }
+        PHP;
+}
+
+it('refuses an edit that added a call inside a file declaring no controller', function () {
+    // The edit adds `run() -> helper()`. Nothing declares a controller in this file, so before
+    // the scope was widened the fresh pass built nothing for it: the check compared an empty set
+    // against an empty set, approved, and the merge carried the previous edges over — a graph
+    // missing the call that had just been added, and nothing to say so.
+    writeScopedSource($this->root.'/app/Services/Publisher.php', publisherCalling(false));
+    $previous = buildFull($this->root);
+
+    writeScopedSource($this->root.'/app/Services/Publisher.php', publisherCalling(true));
+
+    expect(fn () => buildScoped($this->root, [$this->root.'/app/Services/Publisher.php'], $previous))
+        ->toThrow(ScopedRebuildNotApplicable::class);
+});
+
+it('rebuilds a non-controller file through the chain that reaches it', function () {
+    // The other half: an edit that changed the body without touching a call must still take the
+    // fast path, and the file's own nodes must come back rebuilt rather than carried over. Node
+    // signatures are compared, not edges: the edges are identical by construction here, and it is
+    // the node data — what the fresh pass produces and the previous build cannot — that a merge
+    // reusing the old node would get wrong.
+    writeScopedSource($this->root.'/app/Services/Publisher.php', publisherCalling(false));
+    $previous = buildFull($this->root);
+
+    writeScopedSource($this->root.'/app/Services/Publisher.php', <<<'PHP'
+        <?php
+
+        namespace App\Services;
+
+        class Publisher
+        {
+            public function run()
+            {
+                $doubled = 1 + 1;
+
+                return $doubled;
+            }
+
+            public function helper()
+            {
+                return 2;
+            }
+
+            public function log()
+            {
+                return 'logged';
+            }
+        }
+        PHP);
+
+    $scoped = buildScoped($this->root, [$this->root.'/app/Services/Publisher.php'], $previous);
+
+    expect(edgeSignature($scoped))->toBe(edgeSignature(buildFull($this->root)))
+        ->and(IncrementalMerge::signature($scoped)['nodes'])->toBe(IncrementalMerge::signature(buildFull($this->root))['nodes']);
+});
+
+it('refuses when a file the previous build could not parse comes back', function () {
+    // The same hole reached from the other side. A file that does not parse still owns the node
+    // its caller created for it — the class is resolved from the call site, not from the file —
+    // but it owns none of the edges its body would have made. Fixing the syntax adds them, and
+    // that is an edit to the call graph like any other.
+    writeScopedSource($this->root.'/app/Services/Publisher.php', <<<'PHP'
+        <?php
+
+        namespace App\Services;
+
+        class Publisher
+        {
+            public function run( { }
+        }
+        PHP);
+    $previous = buildFull($this->root);
+    expect(IncrementalMerge::ownedEdgeKeySet($previous, [$this->root.'/app/Services/Publisher.php']))->toBe([]);
+
+    writeScopedSource($this->root.'/app/Services/Publisher.php', publisherCalling(true));
+
+    expect(fn () => buildScoped($this->root, [$this->root.'/app/Services/Publisher.php'], $previous))
+        ->toThrow(ScopedRebuildNotApplicable::class);
 });

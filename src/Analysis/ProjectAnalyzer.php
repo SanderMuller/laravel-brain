@@ -6,6 +6,7 @@ namespace LaraMint\LaravelBrain\Analysis;
 
 use LaraMint\LaravelBrain\Analysis\Incremental\IncrementalMerge;
 use LaraMint\LaravelBrain\Analysis\Incremental\ScopedRebuildNotApplicable;
+use LaraMint\LaravelBrain\Analysis\Incremental\ScopeExpansion;
 use LaraMint\LaravelBrain\Graph\Graph;
 use LaraMint\LaravelBrain\Graph\GraphBuilder;
 use LaraMint\LaravelBrain\Graph\GraphSplitter;
@@ -270,9 +271,18 @@ class ProjectAnalyzer
         $this->emit('step:start', ['step' => 'controllers', 'label' => 'Analyzing controllers', 'message' => '  → Analyzing controllers...']);
         $controllers = $this->controllerAnalyzer->analyze($projectRoot, $routes);
 
-        // A scoped run traces only the controllers declared in the changed files.
+        // A scoped run traces the controllers declared in the changed files, plus the ones whose
+        // chain reached those files in the previous build — see {@see ScopeExpansion}. Without the
+        // second half a changed file that declares no controller is never rebuilt, and the check
+        // below has nothing to compare, so an edit that added a call passes as one that changed
+        // nothing.
         if ($scopeToFiles !== null) {
             $wanted = array_flip(array_map(static fn (string $f): string => realpath($f) ?: $f, $scopeToFiles));
+            if ($mergeInto !== null) {
+                foreach (array_keys(ScopeExpansion::controllerFilesReaching($mergeInto, $scopeToFiles)) as $file) {
+                    $wanted[realpath($file) ?: $file] = true;
+                }
+            }
             $controllers = array_filter(
                 $controllers,
                 static fn (ControllerDefinition $c): bool => isset($wanted[realpath($c->file) ?: $c->file]),
