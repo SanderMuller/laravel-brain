@@ -43,6 +43,7 @@ class SecurityAnalyzer
      */
     private const AUTH_PATTERNS = [
         'auth',
+        'auth.basic',
         'sanctum',
         'jwt',
         'passport',
@@ -54,8 +55,8 @@ class SecurityAnalyzer
 
     /**
      * The framework middlewares an `extends` chain terminates on, which is the
-     * same set the patterns above name — by alias (`auth`, `verified`,
-     * `signed`) or literally. Matching a name and walking a chain
+     * same set the patterns above name — by alias (`auth`, `auth.basic`,
+     * `verified`, `signed`) or literally. Matching a name and walking a chain
      * are two ways of asking one question, so they answer from one list: a
      * middleware that IS one of these classes, or descends from one, gates the
      * request whichever form it reaches this analyzer in.

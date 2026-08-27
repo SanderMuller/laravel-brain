@@ -583,6 +583,15 @@ it('classifies the framework auth middlewares themselves as authed by class name
     'Illuminate\\Routing\\Middleware\\ValidateSignature',
 ]);
 
+it('classifies the auth.basic alias as authed', function () {
+    // Laravel's own alias for AuthenticateWithBasicAuth. It is not the `auth`
+    // pattern — that one matches `auth`, `auth:…` and `auth\…`, never a dotted
+    // sibling — so it needs naming in its own right.
+    $route = makeSecurityRoute('POST', '/records', ['auth.basic']);
+
+    expect(exposure($route, new MiddlewareRegistry([], [], [])))->toBe('authed');
+});
+
 it('still classifies a middleware that authenticates nothing as public', function () {
     // The widening is four framework classes, not "anything with a parent".
     $route = makeSecurityRoute('POST', '/records', ['App\\Http\\Middleware\\CyclicA']);
