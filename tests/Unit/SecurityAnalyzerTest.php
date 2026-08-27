@@ -487,3 +487,49 @@ it('still flags MISSING_THROTTLE on sensitive routes with no rate-limiting', fun
     expect(issueTypes($analysis, 'route::POST::/login-noop'))
         ->toContain('MISSING_THROTTLE');
 });
+
+// =============================================================================
+// Custom auth guard detection via a verified `extends Authenticate` chain.
+// Catches guards whose class name does not contain "auth" (e.g. an
+// `auth.customer` alias mapped to App\Http\Middleware\AuthenticateCustomer),
+// which basename matching against the framework `Authenticate` alone misses.
+// =============================================================================
+
+function customAuthFixtureRoot(): string
+{
+    return fixture('custom-auth-project');
+}
+
+it('classifies a differently-named Authenticate subclass (resolved via alias) as authed', function () {
+    $route = makeSecurityRoute('DELETE', '/account/claims/{claim}', ['auth.customer']);
+    $registry = new MiddlewareRegistry([], [], [
+        'auth.customer' => 'App\\Http\\Middleware\\AuthenticateCustomer',
+    ]);
+
+    $analysis = (new SecurityAnalyzer)->analyze([$route], $registry, [], customAuthFixtureRoot());
+
+    $routeId = 'route::DELETE::/account/claims/{claim}';
+    expect($analysis[$routeId]['exposure'])->toBe('authed')
+        ->and(issueTypes($analysis, $routeId))->not->toContain('PUBLIC_WRITE');
+});
+
+it('classifies a differently-named Authenticate subclass given by bare FQCN as authed', function () {
+    $route = makeSecurityRoute('POST', '/account/profile', ['App\\Http\\Middleware\\AuthenticateCustomer']);
+    $registry = new MiddlewareRegistry([], [], []);
+
+    $analysis = (new SecurityAnalyzer)->analyze([$route], $registry, [], customAuthFixtureRoot());
+
+    expect($analysis['route::POST::/account/profile']['exposure'])->toBe('authed');
+});
+
+it('terminates on a cyclic middleware extends chain instead of exhausting memory', function () {
+    // CyclicA extends CyclicB extends CyclicA. Neither reaches Authenticate, so
+    // the route stays public; the point is that the walk returns at all.
+    $route = makeSecurityRoute('POST', '/cyclic', ['App\\Http\\Middleware\\CyclicA']);
+    $registry = new MiddlewareRegistry([], [], []);
+
+    $analysis = (new SecurityAnalyzer)->analyze([$route], $registry, [], customAuthFixtureRoot());
+
+    expect($analysis['route::POST::/cyclic']['exposure'])->toBe('public')
+        ->and(issueTypes($analysis, 'route::POST::/cyclic'))->toContain('PUBLIC_WRITE');
+});
