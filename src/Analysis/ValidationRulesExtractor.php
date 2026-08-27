@@ -23,6 +23,28 @@ final class ValidationRulesExtractor
 
     private PrettyPrinter $printer;
 
+    /**
+     * Whether a file declares a non-abstract rules(), keyed by path + mtime + size.
+     *
+     * The answer is asked once per graph edge that could reach a Form Request, and the same file
+     * is reached from many edges: measured over three applications, 1,116 / 604 / 3,936 calls
+     * concerned 345 / 142 / 370 distinct files. The parse itself is already shared, but the
+     * traversal that looks for rules() was repeated every time — and when the answer is "no", as
+     * it usually is, nothing stops it early and it walks the whole file.
+     *
+     * @var array<string, bool>
+     */
+    private array $hasRulesMemo = [];
+
+    /**
+     * Entry cap, enforced the way {@see PhpFileParser} enforces its own: insertion-ordered
+     * eviction of the oldest quarter. A single build cannot come near it — the most any of the
+     * three applications measured asks about is 370 distinct files. It bounds an extractor that
+     * outlives one build, where every edit mints a key and the superseded entry would otherwise
+     * stay for the life of the process.
+     */
+    private const MEMO_MAX = 8000;
+
     public function __construct(?PhpFileParser $parser = null)
     {
         $this->parser = $parser ?? new PhpFileParser;
@@ -31,10 +53,48 @@ final class ValidationRulesExtractor
 
     public function hasNonAbstractRulesMethod(string $file): bool
     {
-        if (! is_file($file)) {
+        $stat = @stat($file);
+        if ($stat === false || ! is_file($file)) {
             return false;
         }
 
+        // Mirrors PhpFileParser's key and its rule for files being edited this very second: a
+        // file whose mtime is not yet in the past can change again without changing its key, so
+        // it is answered from source and not remembered.
+        $settled = $stat['mtime'] < time();
+        $key = $file.':'.$stat['mtime'].':'.$stat['size'];
+        if ($settled && isset($this->hasRulesMemo[$key])) {
+            return $this->hasRulesMemo[$key];
+        }
+
+        $verdict = $this->computeHasNonAbstractRulesMethod($file);
+        if (! $settled) {
+            return $verdict;
+        }
+
+        $this->evictIfFull();
+
+        return $this->hasRulesMemo[$key] = $verdict;
+    }
+
+    /** Drop the oldest quarter in one pass, rather than one entry per insert from here on. */
+    private function evictIfFull(): void
+    {
+        if (count($this->hasRulesMemo) < self::MEMO_MAX) {
+            return;
+        }
+
+        $evict = intdiv(self::MEMO_MAX, 4);
+        foreach (array_keys($this->hasRulesMemo) as $key) {
+            unset($this->hasRulesMemo[$key]);
+            if (--$evict <= 0) {
+                return;
+            }
+        }
+    }
+
+    private function computeHasNonAbstractRulesMethod(string $file): bool
+    {
         $parsed = $this->parser->parse($file);
         if ($parsed['ast'] === null) {
             return false;
