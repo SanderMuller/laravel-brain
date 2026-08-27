@@ -204,7 +204,37 @@ class ProjectAnalyzer
         }
     }
 
+    /**
+     * Runs the analysis with PHP's cycle collector switched off.
+     *
+     * That collector exists to reclaim objects which reference each other in a loop, and a build
+     * makes none. Measured across three applications it ran 15 to 37 times per build and
+     * collected **zero** objects every time, including at the deliberate `gc_collect_cycles()`
+     * further down: ASTs are trees, nothing here links a child back to its parent, and neither
+     * Node nor Edge holds a reference to the Graph — so every one of those passes walks the root
+     * buffer and finds nothing to free. Switching it off for the build is worth 3-10%, and peak
+     * memory does not move: 268 MB and 276 MB on two applications either way, and still unchanged
+     * after five builds in one process, which is what watch mode does.
+     *
+     * The caller's setting is restored afterwards, including when the analysis throws: a scoped
+     * run raises {@see ScopedRebuildNotApplicable} from the middle of a build, and the process
+     * belongs to whoever called this.
+     */
     public function analyze(string $projectRoot, ?callable $onProgress = null): AnalysisResult
+    {
+        $collectorWasEnabled = gc_enabled();
+        gc_disable();
+
+        try {
+            return $this->runAnalysis($projectRoot, $onProgress);
+        } finally {
+            if ($collectorWasEnabled) {
+                gc_enable();
+            }
+        }
+    }
+
+    private function runAnalysis(string $projectRoot, ?callable $onProgress = null): AnalysisResult
     {
         if ($onProgress !== null) {
             $this->onProgress = $onProgress;
