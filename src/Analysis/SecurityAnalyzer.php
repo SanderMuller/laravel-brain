@@ -702,13 +702,21 @@ class SecurityAnalyzer
     /**
      * Expand middleware group aliases (auth, guest, etc.) using the registry.
      */
+    /**
+     * The middleware a route really runs, groups expanded — see {@see MiddlewareRegistry::expand()}.
+     *
+     * A group was previously left as its own name, so `->middleware('api')` reached the exposure
+     * check as the single string `api`, matching no pattern and no class. An application that puts
+     * `auth` in a group — which is what a group is for — had every route behind it classified
+     * `public`, and every mutating one drew a `PUBLIC_WRITE` saying anyone could call it.
+     */
     private function resolveMiddlewares(array $middlewares, MiddlewareRegistry $registry): array
     {
         $resolved = [];
         foreach ($middlewares as $mw) {
-            [$alias, $params] = array_pad(explode(':', $mw, 2), 2, null);
-            $fqcn = $registry->resolveAlias($alias);
-            $resolved[] = $params !== null ? "{$fqcn}:{$params}" : $fqcn;
+            foreach ($registry->expand($mw) as $one) {
+                $resolved[] = $one;
+            }
         }
 
         return array_unique($resolved);
