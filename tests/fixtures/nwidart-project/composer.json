@@ -1,0 +1,8 @@
+{
+    "name": "acme/nwidart-app",
+    "autoload": {
+        "psr-4": {
+            "App\\": "app/"
+        }
+    }
+}

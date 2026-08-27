@@ -1,0 +1,19 @@
+{
+    "packages": [
+        {
+            "name": "acme/shop",
+            "type": "library",
+            "install-path": "../acme/shop",
+            "dist": { "type": "path", "url": "packages/shop", "reference": "abc123" },
+            "autoload": { "psr-4": { "Acme\\Shop\\": "src/" } }
+        },
+        {
+            "name": "acme/vendor-lib",
+            "type": "library",
+            "install-path": "../acme/vendor-lib",
+            "dist": { "type": "zip", "url": "https://example.test/vendor-lib.zip" },
+            "autoload": { "psr-4": { "Acme\\VendorLib\\": "src/" } }
+        }
+    ],
+    "dev": true
+}

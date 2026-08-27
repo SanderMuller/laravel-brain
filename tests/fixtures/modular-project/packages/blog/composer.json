@@ -1,0 +1,8 @@
+{
+    "name": "acme/blog",
+    "autoload": {
+        "psr-4": {
+            "Acme\\Blog\\": "src/"
+        }
+    }
+}

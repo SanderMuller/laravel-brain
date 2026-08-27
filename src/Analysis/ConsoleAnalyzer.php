@@ -32,6 +32,15 @@ class ScheduleEntry
 
 class ConsoleAnalyzer
 {
+    /** @var string[] Schedule methods that state a cadence. */
+    public const FREQUENCY_METHODS = [
+        'everyMinute', 'everyTwoMinutes', 'everyThreeMinutes', 'everyFiveMinutes',
+        'everyTenMinutes', 'everyFifteenMinutes', 'everyThirtyMinutes', 'hourly',
+        'hourlyAt', 'daily', 'dailyAt', 'twiceDaily', 'weekly', 'weeklyOn',
+        'monthly', 'monthlyOn', 'twiceMonthly', 'lastDayOfMonth', 'quarterly',
+        'yearly', 'cron', 'timezone',
+    ];
+
     private PhpFileParser $parser;
 
     /** @var string[] */
@@ -68,10 +77,12 @@ class ConsoleAnalyzer
         $schedule = [];
         $root = rtrim($projectRoot, '/');
 
-        // 1. Closure-based commands: files containing "console" in their basename
+        // 1. Closure-based commands and schedule entries. Laravel's own skeleton keeps
+        //    both in routes/console.php, but a schedule split out of it is conventionally
+        //    routes/schedule.php — a file the "console" keyword alone never reaches.
         foreach ($this->consoleRoutePaths as $pattern) {
             $baseDir = $this->resolveBaseDir($root, $pattern);
-            foreach ($this->findFilesContaining($baseDir, 'console') as $file) {
+            foreach ($this->findFilesContaining($baseDir, ['console', 'schedule']) as $file) {
                 $result = $this->parseConsoleRouteFile($file);
                 $commands = array_merge($commands, $result['commands']);
                 $schedule = array_merge($schedule, $result['schedule']);
@@ -148,10 +159,21 @@ class ConsoleAnalyzer
 
             public array $schedule = [];
 
+            /** @var array<int, string> spl_object_id of a static call => frequency read off its chain */
+            private array $chainFrequencies = [];
+
             public function __construct(private string $file) {}
 
             public function enterNode(Node $node): ?int
             {
+                // Frequency lives on the calls wrapped AROUND the registration
+                // (`Schedule::command(...)->dailyAt(...)`), and a node cannot see its own
+                // parents. Traversal is top-down, so the chain is read on the way in and
+                // parked for the static call that arrives a few nodes later.
+                if ($node instanceof Node\Expr\MethodCall) {
+                    $this->rememberChainFrequency($node);
+                }
+
                 if (! $node instanceof Node\Expr\StaticCall) {
                     return null;
                 }
@@ -176,15 +198,14 @@ class ConsoleAnalyzer
                     }
                 }
 
-                // Schedule::command('sig')->daily()
-                if ($class === 'Schedule' && $method === 'command') {
-                    $sig = $this->strArg($node->args[0] ?? null);
-                    $freq = $this->walkChainForFrequency($node);
-                    if ($sig !== null) {
+                // Schedule::command('sig')->daily(), and the job/call siblings
+                if ($class === 'Schedule' && in_array($method, ['command', 'job', 'call'], true)) {
+                    $target = $this->scheduleTarget($method, $node->args[0] ?? null);
+                    if ($target !== null) {
                         $this->schedule[] = new ScheduleEntry(
-                            type: 'command',
-                            target: $sig,
-                            frequency: $freq,
+                            type: $method,
+                            target: $target,
+                            frequency: $this->walkChainForFrequency($node),
                             file: $this->file,
                         );
                     }
@@ -193,11 +214,58 @@ class ConsoleAnalyzer
                 return null;
             }
 
+            /** What a scheduled entry points at: a signature, a job class, or a closure. */
+            private function scheduleTarget(string $method, ?Node\Arg $arg): ?string
+            {
+                if ($method === 'call') {
+                    return 'Closure';
+                }
+
+                $signature = $this->strArg($arg);
+                if ($signature !== null) {
+                    return $signature;
+                }
+
+                if ($arg?->value instanceof Node\Expr\ClassConstFetch
+                    && $arg->value->class instanceof Node\Name
+                    && $arg->value->name instanceof Node\Identifier
+                    && $arg->value->name->toString() === 'class') {
+                    // The parser preserves original names, so `Job::class` reads as the short
+                    // name it was written with; the resolved name is on the attribute.
+                    return PhpFileParser::resolvedName($arg->value->class)
+                        ?? $arg->value->class->toString();
+                }
+
+                return null;
+            }
+
             private function walkChainForFrequency(Node $node): string
             {
-                // Walk up the parent chain looking for frequency method names
-                // The AST has the parent as the receiver of subsequent method calls
-                return '';
+                return $this->chainFrequencies[spl_object_id($node)] ?? '';
+            }
+
+            /**
+             * Read the first frequency method off a `Schedule::…()->frequency()->…` chain and
+             * park it under the static call the chain is built on.
+             */
+            private function rememberChainFrequency(Node\Expr\MethodCall $node): void
+            {
+                $frequency = '';
+                $current = $node;
+
+                while ($current instanceof Node\Expr\MethodCall) {
+                    $name = $current->name instanceof Node\Identifier ? $current->name->toString() : '';
+                    if ($frequency === '' && in_array($name, ConsoleAnalyzer::FREQUENCY_METHODS, true)) {
+                        $frequency = $name;
+                    }
+                    $current = $current->var;
+                }
+
+                if ($frequency === '' || ! $current instanceof Node\Expr\StaticCall) {
+                    return;
+                }
+
+                $this->chainFrequencies[spl_object_id($current)] ??= $frequency;
             }
 
             private function strArg(?Node $node): ?string
@@ -260,6 +328,10 @@ class ConsoleAnalyzer
 
             private ?string $description = null;
 
+            private ?string $attributeSignature = null;
+
+            private ?string $attributeDescription = null;
+
             public function __construct(private string $file) {}
 
             public function enterNode(Node $node): ?int
@@ -269,12 +341,14 @@ class ConsoleAnalyzer
                 }
                 if ($node instanceof Node\Stmt\Class_) {
                     $this->className = $node->name?->toString();
+                    $this->readCommandAttributes($node);
                 }
                 if ($node instanceof Node\Stmt\Property) {
                     foreach ($node->props as $prop) {
                         $name = $prop->name->toString();
-                        if ($name === 'signature' && $prop->default instanceof Node\Scalar\String_) {
-                            $this->signature = $prop->default->value;
+                        // $name is the pre-signature spelling; it still names the command.
+                        if (($name === 'signature' || $name === 'name') && $prop->default instanceof Node\Scalar\String_) {
+                            $this->signature ??= $prop->default->value;
                         }
                         if ($name === 'description' && $prop->default instanceof Node\Scalar\String_) {
                             $this->description = $prop->default->value;
@@ -287,18 +361,74 @@ class ConsoleAnalyzer
 
             public function afterTraverse(array $nodes): ?int
             {
-                if ($this->className && $this->signature !== null) {
+                // A property wins over an attribute: that is the precedence Laravel itself
+                // applies when a command declares both.
+                $signature = $this->signature ?? $this->attributeSignature;
+                $description = $this->description ?? $this->attributeDescription;
+
+                if ($this->className && $signature !== null) {
                     $fqcn = $this->namespace
                         ? $this->namespace.'\\'.$this->className
                         : $this->className;
 
                     $this->result = new ConsoleCommandDefinition(
-                        signature: $this->signature,
-                        description: $this->description ?? '',
+                        signature: $signature,
+                        description: $description ?? '',
                         class: $fqcn,
                         file: $this->file,
                         source: 'class',
                     );
+                }
+
+                return null;
+            }
+
+            /**
+             * Laravel 12 declares a command's signature and description as class
+             * attributes rather than properties, and Symfony's #[AsCommand] carries the
+             * same two values. A command written either way has no $signature property
+             * at all, so reading properties alone finds nothing.
+             */
+            private function readCommandAttributes(Node\Stmt\Class_ $node): void
+            {
+                foreach ($node->attrGroups as $group) {
+                    foreach ($group->attrs as $attribute) {
+                        switch ($attribute->name->getLast()) {
+                            case 'Signature':
+                                $this->attributeSignature ??= $this->attributeArg($attribute->args, 'signature', 0);
+                                break;
+                            case 'Description':
+                                $this->attributeDescription ??= $this->attributeArg($attribute->args, 'description', 0);
+                                break;
+                            case 'AsCommand':
+                                $this->attributeSignature ??= $this->attributeArg($attribute->args, 'name', 0);
+                                $this->attributeDescription ??= $this->attributeArg($attribute->args, 'description', 1);
+                                break;
+                        }
+                    }
+                }
+            }
+
+            /**
+             * Read a string attribute argument given either by name or by position.
+             *
+             * @param  Node\Arg[]  $args
+             */
+            private function attributeArg(array $args, string $name, int $position): ?string
+            {
+                $index = 0;
+
+                foreach ($args as $arg) {
+                    $named = $arg->name instanceof Node\Identifier && $arg->name->toString() === $name;
+                    $positional = $arg->name === null && $index === $position;
+
+                    if (($named || $positional) && $arg->value instanceof Node\Scalar\String_) {
+                        return $arg->value->value;
+                    }
+
+                    if ($arg->name === null) {
+                        $index++;
+                    }
                 }
 
                 return null;
@@ -418,13 +548,6 @@ class ConsoleAnalyzer
             /** Walk the method chain to find the first frequency-like method. */
             private function chainFrequency(Node\Expr\MethodCall $node): string
             {
-                $freq = ['everyMinute', 'everyFiveMinutes', 'everyTenMinutes',
-                    'everyFifteenMinutes', 'everyThirtyMinutes', 'hourly',
-                    'daily', 'dailyAt', 'weekly', 'weeklyOn', 'monthly',
-                    'monthlyOn', 'quarterly', 'yearly', 'cron',
-                    'everyTwoMinutes', 'everyThreeMinutes', 'twiceDaily',
-                    'twiceMonthly', 'lastDayOfMonth', 'timezone'];
-
                 // The node itself may be wrapped by frequency calls further up;
                 // we look at the var chain (the receiver of this call)
                 $current = $node;
@@ -432,7 +555,7 @@ class ConsoleAnalyzer
                     $m = $current->name instanceof Node\Identifier
                         ? $current->name->toString()
                         : '';
-                    if (in_array($m, $freq, true)) {
+                    if (in_array($m, ConsoleAnalyzer::FREQUENCY_METHODS, true)) {
                         return $m;
                     }
                     $current = $current->var;
@@ -474,7 +597,11 @@ class ConsoleAnalyzer
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private function findFilesContaining(string $dir, string $keyword): array
+    /**
+     * @param  string[]  $keywords
+     * @return string[]
+     */
+    private function findFilesContaining(string $dir, array $keywords): array
     {
         if (! is_dir($dir)) {
             return [];
@@ -485,10 +612,16 @@ class ConsoleAnalyzer
             new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)
         );
         foreach ($iterator as $entry) {
-            if ($entry->isFile()
-                && $entry->getExtension() === 'php'
-                && str_contains(strtolower($entry->getBasename()), $keyword)) {
-                $files[] = $entry->getPathname();
+            if (! $entry->isFile() || $entry->getExtension() !== 'php') {
+                continue;
+            }
+
+            $basename = strtolower($entry->getBasename());
+            foreach ($keywords as $keyword) {
+                if (str_contains($basename, $keyword)) {
+                    $files[] = $entry->getPathname();
+                    break;
+                }
             }
         }
 

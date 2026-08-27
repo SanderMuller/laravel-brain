@@ -180,6 +180,23 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Channel Registrars
+    // -------------------------------------------------------------------------
+    // Classes whose static channel() call registers a broadcast channel, on top of
+    // the Broadcast facade, which is always recognised.
+    //
+    // Add your own wrapper here if channels are not registered through the facade
+    // directly — a class that scopes every channel to a tenant, for example. Entries
+    // are matched by short class name, so either spelling works:
+    //
+    //   'channel_registrars' => [
+    //       'TenantChannel',
+    //       App\Broadcasting\TenantChannel::class,
+    //   ],
+    //
+    'channel_registrars' => [],
+
+    // -------------------------------------------------------------------------
     // Job Dispatch
     // -------------------------------------------------------------------------
     // Brain resolves the built-in dispatch verbs (dispatch(), dispatch_sync(),
