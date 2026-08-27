@@ -52,6 +52,25 @@ class SecurityAnalyzer
         'Illuminate\\Routing\\Middleware\\ValidateSignature',
     ];
 
+    /**
+     * The framework middlewares an `extends` chain terminates on, which is the
+     * same set the patterns above name — by alias (`auth`, `verified`,
+     * `signed`) or literally. Matching a name and walking a chain
+     * are two ways of asking one question, so they answer from one list: a
+     * middleware that IS one of these classes, or descends from one, gates the
+     * request whichever form it reaches this analyzer in.
+     *
+     * The chain is what a name cannot see. `App\Http\Middleware\RequireOtp
+     * extends EnsureEmailIsVerified` matches no pattern and no basename, and
+     * its route is classified `public` on a guard that is really there.
+     */
+    private const AUTH_BASE_CLASSES = [
+        'Illuminate\\Auth\\Middleware\\Authenticate',
+        'Illuminate\\Auth\\Middleware\\AuthenticateWithBasicAuth',
+        'Illuminate\\Auth\\Middleware\\EnsureEmailIsVerified',
+        'Illuminate\\Routing\\Middleware\\ValidateSignature',
+    ];
+
     /** Middleware that redirects authenticated users away (login/register pages). */
     private const GUEST_PATTERNS = [
         'guest',
@@ -622,9 +641,10 @@ class SecurityAnalyzer
     }
 
     /**
-     * True when $fqcn is the framework's Authenticate middleware or any class
-     * whose `extends` chain reaches it. Results are memoised per scan so each
-     * FQCN is walked at most once.
+     * True when $fqcn is one of the framework middlewares in
+     * {@see self::AUTH_BASE_CLASSES} or any class whose `extends` chain
+     * reaches one. Results are memoised per scan so each FQCN is walked at
+     * most once.
      */
     private function isAuthClass(string $fqcn): bool
     {
@@ -635,7 +655,7 @@ class SecurityAnalyzer
         if (isset($this->authClassCache[$fqcn])) {
             return $this->authClassCache[$fqcn];
         }
-        if ($fqcn === 'Illuminate\\Auth\\Middleware\\Authenticate') {
+        if (in_array($fqcn, self::AUTH_BASE_CLASSES, true)) {
             return $this->authClassCache[$fqcn] = true;
         }
 

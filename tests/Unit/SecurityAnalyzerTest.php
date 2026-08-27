@@ -533,3 +533,67 @@ it('terminates on a cyclic middleware extends chain instead of exhausting memory
     expect($analysis['route::POST::/cyclic']['exposure'])->toBe('public')
         ->and(issueTypes($analysis, 'route::POST::/cyclic'))->toContain('PUBLIC_WRITE');
 });
+
+// =============================================================================
+// The same walk, for the other three framework auth middlewares. `Authenticate`
+// is not the only class an application extends to build a guard, and a
+// descendant of the other three matched no pattern, no basename and no chain.
+// =============================================================================
+
+it('classifies a descendant of any framework auth middleware as authed', function (string $middleware) {
+    $route = makeSecurityRoute('DELETE', '/records/{record}', [$middleware]);
+
+    $analysis = (new SecurityAnalyzer)->analyze(
+        [$route],
+        new MiddlewareRegistry([], [], []),
+        [],
+        customAuthFixtureRoot(),
+    );
+
+    $routeId = 'route::DELETE::/records/{record}';
+    expect($analysis[$routeId]['exposure'])->toBe('authed')
+        ->and(issueTypes($analysis, $routeId))->not->toContain('PUBLIC_WRITE');
+})->with([
+    'basic auth' => 'App\\Http\\Middleware\\RequireBasicCredentials',
+    'email verification' => 'App\\Http\\Middleware\\RequireOtp',
+    'signed URL' => 'App\\Http\\Middleware\\CheckSignedLink',
+    // Two hops: the walk follows a parent it cannot match rather than stopping there.
+    'signed URL, one class further out' => 'App\\Http\\Middleware\\CheckExpiringSignedLink',
+]);
+
+it('classifies the framework auth middlewares themselves as authed by class name', function (string $middleware) {
+    // The same question asked of the class an application registers directly.
+    // `AuthenticateWithBasicAuth` and `EnsureEmailIsVerified` were classified
+    // `public` here, while their `auth.basic` and `verified` aliases were not —
+    // one middleware, two answers, decided by the form it arrived in.
+    $route = makeSecurityRoute('POST', '/records', [$middleware]);
+
+    $analysis = (new SecurityAnalyzer)->analyze(
+        [$route],
+        new MiddlewareRegistry([], [], []),
+        [],
+        customAuthFixtureRoot(),
+    );
+
+    expect($analysis['route::POST::/records']['exposure'])->toBe('authed');
+})->with([
+    'Illuminate\\Auth\\Middleware\\Authenticate',
+    'Illuminate\\Auth\\Middleware\\AuthenticateWithBasicAuth',
+    'Illuminate\\Auth\\Middleware\\EnsureEmailIsVerified',
+    'Illuminate\\Routing\\Middleware\\ValidateSignature',
+]);
+
+it('still classifies a middleware that authenticates nothing as public', function () {
+    // The widening is four framework classes, not "anything with a parent".
+    $route = makeSecurityRoute('POST', '/records', ['App\\Http\\Middleware\\CyclicA']);
+
+    $analysis = (new SecurityAnalyzer)->analyze(
+        [$route],
+        new MiddlewareRegistry([], [], []),
+        [],
+        customAuthFixtureRoot(),
+    );
+
+    expect($analysis['route::POST::/records']['exposure'])->toBe('public')
+        ->and(issueTypes($analysis, 'route::POST::/records'))->toContain('PUBLIC_WRITE');
+});
