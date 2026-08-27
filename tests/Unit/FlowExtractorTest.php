@@ -121,3 +121,48 @@ it('does not call a callback that merely contains a query an N+1', function () {
     expect($steps[0]['n1'] ?? false)->toBeFalse()
         ->and($steps[0]['body'][0]['n1'] ?? false)->toBeFalse();
 });
+
+it('labels a closure by its signature rather than its whole body', function () {
+    // The body used to be pretty-printed into the label. For a callback the body is charted
+    // underneath the step anyway, so the label repeated it; and for a chain of callbacks each
+    // level re-rendered everything inside it, which is what made deep nesting quadratic.
+    $steps = flowFor('        $constraint = function ($query, $user) {
+            $query->whereBelongsTo($user);
+        };');
+
+    expect($steps[0]['label'])->toBe('$constraint = function ($query, $user) {...}')
+        ->and($steps[0]['label'])->not->toContain('whereBelongsTo');
+});
+
+it('labels an arrow function by its signature too', function () {
+    $steps = flowFor('        $ids = $items->filter(fn ($item) => $item->id > 10);');
+
+    expect($steps[0]['label'])->toContain('fn ($item) => ...')
+        ->and($steps[0]['label'])->not->toContain('> 10');
+});
+
+it('stops descending into callbacks nested past any depth real code reaches', function () {
+    // FlowExtractor runs over whatever is in the project, and a generated or pathological file
+    // should not be able to take a scan down. Before the limit, 640 levels exhausted a 128 MB
+    // memory limit inside the pretty printer; 320 took half a second for one file.
+    $depth = 200;
+    $inner = '$this->svc->leaf();';
+    for ($i = 0; $i < $depth; $i++) {
+        $inner = "\$this->svc->wrap(function () { {$inner} });";
+    }
+
+    $started = microtime(true);
+    $steps = flowFor('        '.$inner);
+    $elapsed = (microtime(true) - $started) * 1000;
+
+    // It still charts, and it charts quickly — the guard truncates rather than throwing.
+    expect($steps)->toHaveCount(1)->and($elapsed)->toBeLessThan(500);
+
+    $levels = 0;
+    $cursor = $steps;
+    while (! empty($cursor[0]['body'])) {
+        $levels++;
+        $cursor = $cursor[0]['body'];
+    }
+    expect($levels)->toBeLessThanOrEqual(32)->and($levels)->toBeGreaterThan(1);
+});
