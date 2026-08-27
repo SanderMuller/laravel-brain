@@ -351,6 +351,42 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Container Binding Search Paths
+    // -------------------------------------------------------------------------
+    // Directories holding service providers, scanned recursively for container
+    // registrations: bind() / singleton() / scoped() (and their *If variants) plus
+    // the $bindings property.
+    //
+    // An entry is used as-is when it is a directory and expanded as a glob pattern
+    // otherwise, so an application whose providers live in packages can say:
+    //
+    //   'provider_paths' => ['app-modules/*/src'],
+    //
+    'container_bindings' => [
+        'provider_paths' => [
+            'app/Providers',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
+    // Facade Search Paths
+    // -------------------------------------------------------------------------
+    // Directories scanned for application-level facades — classes whose inheritance
+    // chain reaches Illuminate\Support\Facades\Facade. The same directories back the
+    // by-short-name lookup used to follow a facade's parent chain, so a base facade
+    // must be inside them too.
+    //
+    // Glob patterns are expanded, as above:
+    //
+    //   'paths' => ['app-modules/*/src'],
+    //
+    'facades' => [
+        'paths' => [
+            'app',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Livewire Component Search Paths
     // -------------------------------------------------------------------------
     // Directories (relative to project root) that are searched when resolving

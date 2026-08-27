@@ -179,3 +179,44 @@ it('discovers a facade whose own file never mentions Facade', function () {
 
     exec('rm -rf '.escapeshellarg($root));
 });
+
+// ── Configurable source paths ─────────────────────────────────────────────────
+
+it('finds nothing in a packaged application while the default app/ path is used', function () {
+    $registry = (new FacadeAnalyzer)->analyze(fixture('packaged-app'));
+
+    expect($registry->get('Acme\Billing\Facades\Ledger'))->toBeNull();
+});
+
+it('discovers facades that live in packages', function () {
+    $registry = (new FacadeAnalyzer(null, ['packages/*/src']))->analyze(fixture('packaged-app'));
+
+    expect($registry->get('Acme\Billing\Facades\Ledger'))
+        ->toBeInstanceOf(FacadeRecord::class)
+        ->accessor->toBe('Acme\Billing\Support\LedgerService')
+        ->concreteFqcn->toBe('Acme\Billing\Support\LedgerService');
+});
+
+it('follows a facade parent chain that crosses package boundaries', function () {
+    // Carrier extends AbstractCarrierFacade, which lives in a different package —
+    // the by-short-name lookup has to search every configured directory, not one.
+    $registry = (new FacadeAnalyzer(null, ['packages/*/src']))->analyze(fixture('packaged-app'));
+
+    expect($registry->get('Acme\Shipping\Facades\Carrier'))
+        ->toBeInstanceOf(FacadeRecord::class)
+        ->accessor->toBe('carrier');
+});
+
+it('does not register the abstract base facade of a packaged application', function () {
+    $registry = (new FacadeAnalyzer(null, ['packages/*/src']))->analyze(fixture('packaged-app'));
+
+    expect($registry->get('Acme\Shipping\Facades\AbstractCarrierFacade'))->toBeNull();
+});
+
+it('still discovers app/ facades when app is among the configured paths', function () {
+    $registry = (new FacadeAnalyzer(null, ['app', 'packages/*/src']))->analyze(fixture('laravel-project'));
+
+    expect($registry->get('App\Services\V3\ShortUrlV3Facade'))
+        ->toBeInstanceOf(FacadeRecord::class)
+        ->accessor->toBe('App\Services\V3\ShortUrlV3Service');
+});

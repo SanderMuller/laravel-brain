@@ -14,7 +14,8 @@ use PhpParser\Node\Stmt\Class_;
 use PhpParser\Node\Stmt\Namespace_;
 
 /**
- * Scans app/ for application-level Laravel facades and builds a FacadeRegistry.
+ * Scans the application's source directories for application-level Laravel facades
+ * and builds a FacadeRegistry.
  *
  * A facade is any concrete class whose inheritance chain leads to
  * Illuminate\Support\Facades\Facade (multi-level inheritance is supported, e.g.
@@ -29,18 +30,34 @@ final class FacadeAnalyzer
 {
     private const FACADE_BASE = 'Illuminate\\Support\\Facades\\Facade';
 
+    /**
+     * Where application source lives in a default Laravel skeleton.
+     *
+     * @var string[]
+     */
+    public const DEFAULT_PATHS = ['app'];
+
     private PhpFileParser $parser;
 
-    private string $appDir = '';
+    /** @var string[] source directories, relative to the project root */
+    private array $paths;
+
+    /** @var string[] the subset of that exists, relative to the project root */
+    private array $sourceDirs = [];
 
     private string $projectRoot = '';
 
     /** @var array<string, array{ast: mixed, useMap: array<string,string>}|null> */
     private array $parseCache = [];
 
-    public function __construct(?PhpFileParser $parser = null)
+    /**
+     * @param  string[]  $paths  source directories, relative to the project root;
+     *                           glob patterns are expanded
+     */
+    public function __construct(?PhpFileParser $parser = null, array $paths = self::DEFAULT_PATHS)
     {
         $this->parser = $parser ?? new PhpFileParser;
+        $this->paths = $paths;
     }
 
     public function analyze(string $projectRoot): FacadeRegistry
@@ -49,22 +66,16 @@ final class FacadeAnalyzer
         $this->parseCache = [];
         $this->facadeChainShortNames = [];
         $this->projectRoot = rtrim($projectRoot, '/');
-        $this->appDir = $this->projectRoot.'/app';
+        $this->sourceDirs = SourceDirectories::resolve($this->projectRoot, $this->paths);
 
-        if (! is_dir($this->appDir)) {
+        if ($this->sourceDirs === []) {
             return $registry;
         }
 
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($this->appDir, \FilesystemIterator::SKIP_DOTS)
+        $files = iterator_to_array(
+            SourceDirectories::phpFiles($this->projectRoot, $this->sourceDirs),
+            false,
         );
-
-        $files = [];
-        foreach ($iterator as $file) {
-            if ($file->getExtension() === 'php') {
-                $files[] = $file->getPathname();
-            }
-        }
 
         // Round one: only files that name Facade at all. A facade reaches Illuminate's Facade
         // through `extends`, and naming that class — imported, aliased or fully qualified —
@@ -214,7 +225,7 @@ final class FacadeAnalyzer
             return false;
         }
 
-        $file = $this->findFileInAppDir($fqcn);
+        $file = $this->findFileInSourceDirs($fqcn);
         if ($file === null) {
             return false;
         }
@@ -263,7 +274,7 @@ final class FacadeAnalyzer
             return null;
         }
 
-        $file = $this->findFileInAppDir($parentFqcn);
+        $file = $this->findFileInSourceDirs($parentFqcn);
         if ($file === null) {
             return null;
         }
@@ -359,10 +370,10 @@ final class FacadeAnalyzer
     }
 
     /**
-     * Find the PHP file for a FQCN by searching app/ for a file whose name
-     * matches the short class name.
+     * Find the PHP file for a FQCN by searching the configured source directories
+     * for a file whose name matches the short class name.
      */
-    private function findFileInAppDir(string $fqcn): ?string
+    private function findFileInSourceDirs(string $fqcn): ?string
     {
         if ($this->projectRoot === '') {
             return null;
@@ -372,7 +383,7 @@ final class FacadeAnalyzer
             ? substr($fqcn, strrpos($fqcn, '\\') + 1)
             : $fqcn;
 
-        return ProjectFileIndex::findFile($this->projectRoot, ['app'], $shortName.'.php');
+        return ProjectFileIndex::findFile($this->projectRoot, $this->sourceDirs, $shortName.'.php');
     }
 
     /**
