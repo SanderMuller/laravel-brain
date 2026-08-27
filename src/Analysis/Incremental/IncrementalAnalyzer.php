@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis\Incremental;
 
+use LaraMint\LaravelBrain\Analysis\SourceDirectories;
 use LaraMint\LaravelBrain\Graph\Graph;
 
 /**
@@ -24,6 +25,13 @@ use LaraMint\LaravelBrain\Graph\Graph;
  */
 final class IncrementalAnalyzer
 {
+    /**
+     * Everything that can change the graph in a default Laravel skeleton.
+     *
+     * @var string[]
+     */
+    public const DEFAULT_ROOTS = ['app', 'routes', 'config'];
+
     /** @var \Closure(string): Graph */
     private \Closure $fullBuild;
 
@@ -37,16 +45,25 @@ final class IncrementalAnalyzer
 
     private ?BuildFingerprint $prevFp = null;
 
+    /** @var string[] */
+    private array $sourcePaths;
+
     /**
      * @param  \Closure(string): Graph  $fullBuild
      * @param  \Closure(string, string[]): Graph  $scopedBuild
-     * @param  string[]  $roots
+     * @param  string[]  $roots  everything that can change the graph
+     * @param  string[]  $sourcePaths  the subset a scoped rebuild may be limited to
      */
-    public function __construct(\Closure $fullBuild, \Closure $scopedBuild, array $roots = ['app', 'routes', 'config'])
-    {
+    public function __construct(
+        \Closure $fullBuild,
+        \Closure $scopedBuild,
+        array $roots = self::DEFAULT_ROOTS,
+        array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS,
+    ) {
         $this->fullBuild = $fullBuild;
         $this->scopedBuild = $scopedBuild;
         $this->roots = $roots;
+        $this->sourcePaths = $sourcePaths;
     }
 
     /**
@@ -64,7 +81,7 @@ final class IncrementalAnalyzer
 
         // Structural: added/deleted files, or a routes/config change, can shift the route table,
         // entry points or reachability wholesale — always a full rebuild.
-        if ($diff['added'] !== [] || $diff['deleted'] !== [] || $this->touchesNonApp($diff['modified'])) {
+        if ($diff['added'] !== [] || $diff['deleted'] !== [] || $this->touchesNonSource($projectRoot, $diff['modified'])) {
             return $this->full($projectRoot, $fp);
         }
 
@@ -103,12 +120,17 @@ final class IncrementalAnalyzer
     }
 
     /**
+     * Whether any changed file sits outside the source paths — a routes or config change
+     * that a scoped rebuild cannot account for.
+     *
      * @param  string[]  $files
      */
-    private function touchesNonApp(array $files): bool
+    private function touchesNonSource(string $projectRoot, array $files): bool
     {
+        $directories = SourceDirectories::resolve($projectRoot, $this->sourcePaths);
+
         foreach ($files as $f) {
-            if (! str_contains($f, '/app/')) {
+            if (! SourceDirectories::contains($projectRoot, $directories, $f)) {
                 return true;
             }
         }

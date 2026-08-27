@@ -89,11 +89,17 @@ class ProjectAnalyzer
             $this->stringList($channelRegistrars),
         );
 
+        $sourcePaths = config('laravel-brain.source_paths', SourceDirectories::DEFAULT_SOURCE_PATHS);
+        $sourcePaths = is_array($sourcePaths) && $sourcePaths !== []
+            ? $sourcePaths
+            : SourceDirectories::DEFAULT_SOURCE_PATHS;
+
         $listenerPaths = config('laravel-brain.listeners.paths', ['app/Listeners']);
         $providerPaths = config('laravel-brain.listeners.provider_paths', ['app/Providers']);
         $this->listenerAnalyzer = new ListenerAnalyzer(
             is_array($listenerPaths) ? $listenerPaths : [],
             is_array($providerPaths) ? $providerPaths : [],
+            $sourcePaths,
         );
 
         $observerModelPaths = config('laravel-brain.observers.model_paths', ['app/Models']);
@@ -106,9 +112,12 @@ class ProjectAnalyzer
         $policyProviderPaths = config('laravel-brain.policies.provider_paths', ['app/Providers']);
         $this->policyAnalyzer = new PolicyAnalyzer(
             is_array($policyProviderPaths) ? $policyProviderPaths : [],
+            $sourcePaths,
         );
 
-        $this->bladeViewAnalyzer = new BladeViewAnalyzer;
+        $viewPaths = config('laravel-brain.views.paths', BladeViewAnalyzer::DEFAULT_PATHS);
+        $viewPaths = is_array($viewPaths) && $viewPaths !== [] ? $viewPaths : BladeViewAnalyzer::DEFAULT_PATHS;
+        $this->bladeViewAnalyzer = new BladeViewAnalyzer($viewPaths);
 
         $cmdConfig = config('laravel-brain.commands', []);
         $this->consoleAnalyzer = new ConsoleAnalyzer(
@@ -118,9 +127,12 @@ class ProjectAnalyzer
         );
 
         $this->middlewareAnalyzer = new MiddlewareAnalyzer;
-        $this->controllerAnalyzer = new ControllerAnalyzer;
+        $this->controllerAnalyzer = new ControllerAnalyzer($sourcePaths);
         $dispatchHelpers = config('laravel-brain.dispatch.helpers', []);
-        $this->methodTracer = new MethodTracer(is_array($dispatchHelpers) ? $dispatchHelpers : []);
+        $this->methodTracer = new MethodTracer(
+            is_array($dispatchHelpers) ? $dispatchHelpers : [],
+            $sourcePaths,
+        );
         $modelPaths = config('laravel-brain.models.paths', ['app/Models']);
         $this->modelAnalyzer = new ModelAnalyzer(is_array($modelPaths) ? $modelPaths : []);
         $filamentPanelPaths = config('laravel-brain.filament.panel_paths', FilamentAnalyzer::DEFAULT_PANEL_PATHS);
@@ -129,12 +141,13 @@ class ProjectAnalyzer
             is_array($filamentPanelPaths) ? $filamentPanelPaths : FilamentAnalyzer::DEFAULT_PANEL_PATHS,
             is_array($filamentPaths) ? $filamentPaths : FilamentAnalyzer::DEFAULT_PATHS,
         );
-        $this->queryTracer = new QueryTracer;
+        $this->queryTracer = new QueryTracer($sourcePaths);
         $this->securityAnalyzer = new SecurityAnalyzer(
             extraAuthPatterns: $this->stringList(config('laravel-brain.security.auth_middleware', [])),
             extraThrottlePatterns: $this->stringList(config('laravel-brain.security.throttle_middleware', [])),
             trustedRouteNames: $this->stringList(config('laravel-brain.security.trusted_route_names', [])),
             trustedRouteUris: $this->stringList(config('laravel-brain.security.trusted_route_uris', [])),
+            sourcePaths: $sourcePaths,
         );
         $this->graphBuilder = new GraphBuilder;
         $bindingProviderPaths = config(
@@ -148,6 +161,8 @@ class ProjectAnalyzer
         $facadePaths = config('laravel-brain.facades.paths', FacadeAnalyzer::DEFAULT_PATHS);
         $this->facadePaths = is_array($facadePaths) ? $facadePaths : FacadeAnalyzer::DEFAULT_PATHS;
 
+        $this->graphBuilder->setSourcePaths($sourcePaths);
+        $this->graphBuilder->setViewPaths($viewPaths);
         $livewirePaths = config('laravel-brain.livewire.component_paths', []);
         if (is_array($livewirePaths) && $livewirePaths !== []) {
             $this->graphBuilder->setLivewireComponentPaths($livewirePaths);

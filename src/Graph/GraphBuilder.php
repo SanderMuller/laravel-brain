@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LaraMint\LaravelBrain\Graph;
 
 use Illuminate\Support\Str;
+use LaraMint\LaravelBrain\Analysis\BladeViewAnalyzer;
 use LaraMint\LaravelBrain\Analysis\CallChainEdge;
 use LaraMint\LaravelBrain\Analysis\ChannelDefinition;
 use LaraMint\LaravelBrain\Analysis\ConsoleCommandDefinition;
@@ -26,6 +27,7 @@ use LaraMint\LaravelBrain\Analysis\PhpStructureInspector;
 use LaraMint\LaravelBrain\Analysis\ProjectFileIndex;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 use LaraMint\LaravelBrain\Analysis\ScheduleEntry;
+use LaraMint\LaravelBrain\Analysis\SourceDirectories;
 use LaraMint\LaravelBrain\Analysis\ValidationRulesExtractor;
 use LaraMint\LaravelBrain\Parser\PhpExtendsFqcnResolver;
 use LaraMint\LaravelBrain\Parser\PhpFileParser;
@@ -94,6 +96,12 @@ class GraphBuilder
     /** @var array<string, 'enum'|'interface'|'trait'|'abstract_class'|null> */
     private array $surfaceKindCache = [];
 
+    /** @var string[] view roots, relative to the project root */
+    private array $viewPaths = BladeViewAnalyzer::DEFAULT_PATHS;
+
+    /** @var string[] class-file search roots, relative to the project root */
+    private array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS;
+
     private ?ContainerBindingRegistry $bindingRegistry = null;
 
     private ?FacadeRegistry $facadeRegistry = null;
@@ -127,6 +135,32 @@ class GraphBuilder
     {
         if ($paths !== []) {
             $this->livewireComponentPaths = $paths;
+        }
+    }
+
+    /**
+     * The view roots a view name is resolved against. Must match what
+     * {@see BladeViewAnalyzer} was given, or the two
+     * disagree about which templates exist.
+     *
+     * @param  string[]  $paths  relative to the project root; glob patterns are expanded
+     */
+    public function setViewPaths(array $paths): void
+    {
+        if ($paths !== []) {
+            $this->viewPaths = $paths;
+        }
+    }
+
+    /**
+     * The directories searched by file name when the PSR-4 map cannot place a class.
+     *
+     * @param  string[]  $paths  relative to the project root; glob patterns are expanded
+     */
+    public function setSourcePaths(array $paths): void
+    {
+        if ($paths !== []) {
+            $this->sourcePaths = $paths;
         }
     }
 
@@ -187,7 +221,7 @@ class GraphBuilder
 
         if ($this->projectRoot !== '') {
             $relative = str_replace('\\', '/', $fqcn).'.php';
-            foreach (['app/Http/Controllers/', 'app/', 'src/'] as $prefix) {
+            foreach (SourceDirectories::classFilePrefixes($this->projectRoot, $this->sourcePaths) as $prefix) {
                 $path = $this->projectRoot.'/'.$prefix.$relative;
                 if (file_exists($path)) {
                     return $path;
@@ -214,7 +248,11 @@ class GraphBuilder
 
         $filename = $shortName.'.php';
 
-        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename) ?? '';
+        return ProjectFileIndex::findFile(
+            $this->projectRoot,
+            SourceDirectories::resolve($this->projectRoot, $this->sourcePaths),
+            $filename,
+        ) ?? '';
     }
 
     /**
@@ -1457,6 +1495,7 @@ class GraphBuilder
         }
 
         $bladeRel = static fn (string $dotted): string => str_replace('.', '/', $dotted).'.blade.php';
+        $viewRoots = SourceDirectories::resolve($root, $this->viewPaths);
 
         if (str_contains($viewDot, '::')) {
             [$hint, $path] = explode('::', $viewDot, 2);
@@ -1484,7 +1523,11 @@ class GraphBuilder
                 }
             }
 
-            return null;
+            // A namespace hint is bound to its directory at runtime, by whichever provider
+            // registered it, so it cannot be mapped to a path in general. What is left is
+            // the file name: prefer a root whose own path carries the hint, then settle for
+            // any root that has the template.
+            return $this->firstExistingView($root, $viewRoots, $rel, $hint);
         }
 
         $rel = $bladeRel($viewDot);
@@ -1498,7 +1541,37 @@ class GraphBuilder
             }
         }
 
-        return null;
+        return $this->firstExistingView($root, $viewRoots, $rel);
+    }
+
+    /**
+     * @param  string[]  $viewRoots  relative to the project root
+     */
+    private function firstExistingView(string $root, array $viewRoots, string $rel, ?string $hint = null): ?string
+    {
+        $fallback = null;
+
+        foreach ($viewRoots as $viewRoot) {
+            $candidate = $root.'/'.trim($viewRoot, '/').'/'.$rel;
+            if (! is_file($candidate)) {
+                continue;
+            }
+
+            if ($hint === null) {
+                return $candidate;
+            }
+
+            $needle = str_replace('_', '-', Str::kebab($hint));
+            foreach (explode('-', $needle) as $segment) {
+                if ($segment !== '' && str_contains($viewRoot, '/'.$segment.'/')) {
+                    return $candidate;
+                }
+            }
+
+            $fallback ??= $candidate;
+        }
+
+        return $fallback;
     }
 
     /**

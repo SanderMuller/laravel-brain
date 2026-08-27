@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis;
 
+use LaraMint\LaravelBrain\Graph\GraphBuilder;
+
 /**
  * Discovers the view-composition tree: which Blade view renders which other
  * view, via `@include` / `@includeIf` / `@extends` / `@component` / `@each`
@@ -41,16 +43,27 @@ class BladeViewAnalyzer
     /** Tags that are not anonymous view components. */
     private const NON_VIEW_TAGS = ['slot', 'dynamic-component'];
 
-    private string $viewsPath;
+    /**
+     * Where Blade templates live in a default Laravel skeleton.
+     *
+     * @var string[]
+     */
+    public const DEFAULT_PATHS = ['resources/views'];
+
+    /** @var string[] view roots, relative to the project root */
+    private array $viewsPaths;
 
     /**
-     * The views directory is fixed to `resources/views` to stay in lockstep with
-     * how the graph builder resolves a view to its file; the parameter exists
-     * only so tests can point at a fixture tree.
+     * The view roots must stay in lockstep with how the graph builder resolves a view
+     * to its file — {@see GraphBuilder::setViewPaths()}
+     * takes the same list.
+     *
+     * @param  string[]  $viewsPaths  view roots, relative to the project root;
+     *                                glob patterns are expanded
      */
-    public function __construct(string $viewsPath = 'resources/views')
+    public function __construct(array $viewsPaths = self::DEFAULT_PATHS)
     {
-        $this->viewsPath = trim($viewsPath, '/') !== '' ? trim($viewsPath, '/') : 'resources/views';
+        $this->viewsPaths = $viewsPaths !== [] ? $viewsPaths : self::DEFAULT_PATHS;
     }
 
     /**
@@ -58,35 +71,45 @@ class BladeViewAnalyzer
      */
     public function analyze(string $projectRoot): array
     {
-        $viewsRoot = rtrim($projectRoot, '/').'/'.$this->viewsPath;
-        if (! is_dir($viewsRoot)) {
+        $root = rtrim($projectRoot, '/');
+        $viewsRoots = array_map(
+            static fn (string $directory): string => $root.'/'.$directory,
+            SourceDirectories::resolve($root, $this->viewsPaths),
+        );
+
+        if ($viewsRoots === []) {
             return [];
         }
 
         $map = [];
-        $it = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($viewsRoot, \FilesystemIterator::SKIP_DOTS)
-        );
-        foreach ($it as $fileInfo) {
-            if (! $fileInfo->isFile() || ! str_ends_with($fileInfo->getFilename(), self::BLADE_EXT)) {
-                continue;
-            }
-            $parent = $this->viewNameFromPath($fileInfo->getPathname(), $viewsRoot);
-            // Vendor views are addressed as `pkg::view` (namespaced) and never match a
-            // first-party seed, so scanning them only yields dead map entries.
-            if ($parent === null || str_starts_with($parent, 'vendor.')) {
-                continue;
-            }
 
-            $children = [];
-            foreach ($this->referencedViewNames((string) file_get_contents($fileInfo->getPathname())) as $candidate) {
-                if ($this->viewFileExists($viewsRoot, $candidate) && $candidate !== $parent && ! in_array($candidate, $children, true)) {
-                    $children[] = $candidate;
+        foreach ($viewsRoots as $viewsRoot) {
+            $it = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($viewsRoot, \FilesystemIterator::SKIP_DOTS)
+            );
+            foreach ($it as $fileInfo) {
+                if (! $fileInfo->isFile() || ! str_ends_with($fileInfo->getFilename(), self::BLADE_EXT)) {
+                    continue;
                 }
-            }
-            $children = $this->preferNonIndexComponent($children);
-            if ($children !== []) {
-                $map[$parent] = $children;
+                $parent = $this->viewNameFromPath($fileInfo->getPathname(), $viewsRoot);
+                // Vendor views are addressed as `pkg::view` (namespaced) and never match a
+                // first-party seed, so scanning them only yields dead map entries.
+                if ($parent === null || str_starts_with($parent, 'vendor.')) {
+                    continue;
+                }
+
+                $children = [];
+                foreach ($this->referencedViewNames((string) file_get_contents($fileInfo->getPathname())) as $candidate) {
+                    // A template may include a view that lives under a different root — one
+                    // package rendering another's partial — so every root is a candidate.
+                    if ($this->viewFileExists($viewsRoots, $candidate) && $candidate !== $parent && ! in_array($candidate, $children, true)) {
+                        $children[] = $candidate;
+                    }
+                }
+                $children = $this->preferNonIndexComponent($children);
+                if ($children !== []) {
+                    $map[$parent] = array_values(array_unique(array_merge($map[$parent] ?? [], $children)));
+                }
             }
         }
 
@@ -155,13 +178,23 @@ class BladeViewAnalyzer
         return str_replace('/', '.', $relative);
     }
 
-    private function viewFileExists(string $viewsRoot, string $viewName): bool
+    /**
+     * @param  string[]  $viewsRoots  absolute view roots
+     */
+    private function viewFileExists(array $viewsRoots, string $viewName): bool
     {
         $rel = str_replace('.', '/', $viewName).self::BLADE_EXT;
-        $root = rtrim($viewsRoot, '/');
 
-        // Mirror the graph builder's resolution: the views root, then its vendor/ overrides.
-        return is_file($root.'/'.$rel) || is_file($root.'/vendor/'.$rel);
+        foreach ($viewsRoots as $viewsRoot) {
+            $root = rtrim($viewsRoot, '/');
+
+            // Mirror the graph builder's resolution: the views root, then its vendor/ overrides.
+            if (is_file($root.'/'.$rel) || is_file($root.'/vendor/'.$rel)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

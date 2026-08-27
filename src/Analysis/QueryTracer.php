@@ -44,8 +44,15 @@ class QueryTracer
     /** @var array<string, array|null> file path → parse result cache */
     private array $parseCache = [];
 
-    public function __construct()
+    /** @var string[] class-file search roots, relative to the project root */
+    private array $sourcePaths;
+
+    /**
+     * @param  string[]  $sourcePaths  class-file search roots, relative to the project root
+     */
+    public function __construct(array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS)
     {
+        $this->sourcePaths = $sourcePaths;
         $this->parser = new PhpFileParser;
     }
 
@@ -226,7 +233,7 @@ class QueryTracer
         }
         // Fallback: common locations
         $relative = str_replace('\\', '/', $fqcn).'.php';
-        foreach (['app/', 'src/'] as $prefix) {
+        foreach (SourceDirectories::classFilePrefixes($projectRoot, $this->sourcePaths) as $prefix) {
             $path = $projectRoot.'/'.$prefix.$relative;
             if (file_exists($path)) {
                 return $path;

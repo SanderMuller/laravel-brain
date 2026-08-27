@@ -119,3 +119,59 @@ it('reports unchanged when nothing changed', function () {
 
     ia_rmrf($dir);
 });
+
+// ── Configurable roots ────────────────────────────────────────────────────────
+
+/** A project that keeps its code in packages rather than in app/. */
+function ia_writePackagedProject(string $dir): void
+{
+    foreach (['/packages/shop/src', '/config'] as $s) {
+        is_dir($dir.$s) || mkdir($dir.$s, 0o755, true);
+    }
+    file_put_contents($dir.'/packages/shop/src/Ledger.php', "<?php\n\nnamespace Shop;\n\nclass Ledger {}\n");
+    file_put_contents($dir.'/config/app.php', "<?php\n\nreturn ['name' => 'Shop'];\n");
+}
+
+function ia_packagedAnalyzer(int &$fullBuilds): IncrementalAnalyzer
+{
+    return new IncrementalAnalyzer(
+        function () use (&$fullBuilds): Graph {
+            $fullBuilds++;
+
+            return new Graph;
+        },
+        fn (): Graph => new Graph,
+        roots: ['packages', 'config'],
+        sourcePaths: ['packages/*/src'],
+    );
+}
+
+it('takes the scoped path for a change inside the configured source paths', function () {
+    $dir = sys_get_temp_dir().'/lb_ia_pkg_'.bin2hex(random_bytes(6));
+    ia_writePackagedProject($dir);
+
+    $fullBuilds = 0;
+    $analyzer = ia_packagedAnalyzer($fullBuilds);
+
+    expect($analyzer->analyze($dir)['mode'])->toBe('full');
+
+    file_put_contents($dir.'/packages/shop/src/Ledger.php', "<?php\n\nnamespace Shop;\n\nclass Ledger\n{\n    public function post(): void {}\n}\n");
+
+    expect($analyzer->analyze($dir)['mode'])->toBe('incremental')
+        ->and($fullBuilds)->toBe(1);
+});
+
+it('forces a full rebuild for a change outside the configured source paths', function () {
+    $dir = sys_get_temp_dir().'/lb_ia_pkg_'.bin2hex(random_bytes(6));
+    ia_writePackagedProject($dir);
+
+    $fullBuilds = 0;
+    $analyzer = ia_packagedAnalyzer($fullBuilds);
+    $analyzer->analyze($dir);
+
+    // Config is watched but is not a source path: it can rewrite the graph from the top.
+    file_put_contents($dir.'/config/app.php', "<?php\n\nreturn ['name' => 'Shop', 'env' => 'testing'];\n");
+
+    expect($analyzer->analyze($dir)['mode'])->toBe('full')
+        ->and($fullBuilds)->toBe(2);
+});

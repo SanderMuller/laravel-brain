@@ -164,3 +164,30 @@ it('does not create nodes for views that no rendered view reaches', function () 
     // `dashboard` and a transitively-reached component are present.
     expect($views)->toContain('dashboard')->toContain('components.button');
 });
+
+// ── Configurable view roots ───────────────────────────────────────────────────
+
+it('finds nothing in a packaged application while the default resources/views path is used', function () {
+    expect((new BladeViewAnalyzer)->analyze(fixture('packaged-app')))->toBe([]);
+});
+
+it('scans every view root a glob pattern matches', function () {
+    $map = (new BladeViewAnalyzer(['packages/*/resources/views']))->analyze(fixture('packaged-app'));
+
+    expect($map)->toHaveKey('orders.index')
+        ->and($map['orders.index'])->toContain('orders.row');
+});
+
+it('links an include that resolves under a different view root', function () {
+    // One package rendering another's partial: the template exists, just not below the
+    // root the including file came from.
+    $map = (new BladeViewAnalyzer(['packages/*/resources/views']))->analyze(fixture('packaged-app'));
+
+    expect($map['orders.index'])->toContain('invoices.line');
+});
+
+it('still refuses an include with no matching Blade file under any root', function () {
+    $map = (new BladeViewAnalyzer(['packages/*/resources/views']))->analyze(fixture('packaged-app'));
+
+    expect($map['orders.index'])->not->toContain('orders.missing');
+});
