@@ -703,6 +703,11 @@ class GraphBuilder
                     ? $this->getStructureInspector()->listClassMethods($file)
                     : [];
                 $svcMetrics = $this->extractMethodMetrics($fqcn, $method);
+                // What the response carries. The graph already says a route reaches this resource;
+                // the payload's own shape is the part a consumer of the API sees.
+                $payloadKeys = ($file !== '' && is_file($file))
+                    ? $this->getStructureInspector()->payloadKeys($file)
+                    : [];
                 $this->graph->addNode(new Node($id, $type, "{$short}@{$method}", [
                     'fqcn' => $fqcn,
                     'method' => $method,
@@ -713,6 +718,7 @@ class GraphBuilder
                     ...($svcMetrics ? ['metrics' => $svcMetrics] : []),
                     ...($this->hasN1InSteps($flowSteps) ? ['hasN1' => true] : []),
                     ...($this->isFatMethod($svcMetrics) ? ['fatMethod' => true] : []),
+                    ...($payloadKeys === [] ? [] : ['payloadKeys' => $payloadKeys]),
                 ]));
                 break;
 
