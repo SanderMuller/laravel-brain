@@ -10,10 +10,13 @@ use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
 class ExportContextCommand extends Command
 {
+    /** Below this the export cannot carry a focal node and its immediate context. */
+    private const MINIMUM_BUDGET = 500;
+
     protected $signature = 'brain:export-context
                             {--route=      : Filter by route label or URI (case-insensitive)}
                             {--node=       : Target a specific node ID}
-                            {--budget=6000 : Token budget}
+                            {--budget=6000 : Token budget (minimum 500)}
                             {--format=markdown : Output format (markdown|json)}
                             {--output=     : Write to file path instead of stdout}
                             {--force       : Overwrite existing output file without prompting}';
@@ -37,10 +40,29 @@ class ExportContextCommand extends Command
         $exporter = new ContextExporter($store, base_path());
 
         try {
+            $rawBudget = (string) $this->option('budget');
+            $requestedBudget = (int) $rawBudget;
+            $budget = max(self::MINIMUM_BUDGET, $requestedBudget);
+
+            // Silently exporting more than was asked for is worse than saying so: the header
+            // of the export itself reports the budget, and it would report a number the
+            // caller never chose.
+            //
+            // On stderr, not stdout — stdout is the export. See {@see DiagnosticStream}.
+            // And quoting back what was typed rather than what it cast to: `--budget=abc` is 0
+            // as an int, and "asked for 0" names a number nobody wrote.
+            if ($budget !== $requestedBudget) {
+                $asked = is_numeric($rawBudget) ? $rawBudget : '"'.$rawBudget.'"';
+
+                DiagnosticStream::for($this->output->getOutput())->writeln(
+                    "<comment>Budget raised to the {$budget}-token minimum (asked for {$asked}).</comment>"
+                );
+            }
+
             $output = $exporter->export(
                 nodeId: $this->option('node') ? (string) $this->option('node') : null,
                 routeLabel: $this->option('route') ? (string) $this->option('route') : null,
-                budget: max(500, (int) $this->option('budget')),
+                budget: $budget,
                 format: $format,
             );
         } catch (\RuntimeException $e) {
