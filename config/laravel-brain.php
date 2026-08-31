@@ -483,4 +483,18 @@ return [
         ],
     ],
 
+    // -------------------------------------------------------------------------
+    // MCP Server
+    // -------------------------------------------------------------------------
+    // Controls the "brain" MCP server, reachable via `php artisan mcp:start brain`
+    // once the optional laravel/mcp package is installed (composer require --dev
+    // laravel/mcp). Brain auto-detects the package; this only matters if you want
+    // to disable the server without removing the dependency.
+    //
+    // Override via the LARAVEL_BRAIN_MCP_ENABLED env variable.
+    //
+    'mcp' => [
+        'enabled' => env('LARAVEL_BRAIN_MCP_ENABLED', true),
+    ],
+
 ];

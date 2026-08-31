@@ -188,6 +188,39 @@ Each generated file contains your project's tech stack, architecture counts, top
 
 ---
 
+### MCP Server
+
+Everything above exports a static snapshot. The MCP server makes the last scan queryable — Claude Code, Cursor, and any other [Model Context Protocol](https://modelcontextprotocol.io) client can ask the graph questions directly instead of re-exporting each time.
+
+It's an optional, auto-detected add-on — install [Laravel's own MCP package](https://github.com/laravel/mcp) and Brain wires itself up automatically:
+
+```bash
+composer require --dev laravel/mcp
+```
+
+Requires Laravel 10+ and PHP 8.1+. Nothing else in Brain needs either — this is the only feature gated on them, and skipping this package leaves everything else untouched.
+
+Register the server with your MCP client (e.g. Claude Code):
+
+```bash
+claude mcp add brain -- php artisan mcp:start brain
+```
+
+| Tool | What it does |
+|------|--------------|
+| `brain_get_manifest` | The tab index of the last scan — every route/command/channel tab, its risk level |
+| `brain_get_context` | Focused AI context for a route or node — call chain, hotspots, DB ops, source |
+| `brain_find_usages` | Every direct caller of a node, grouped by file |
+| `brain_get_route_security` | Every route's exposure and risk level, filterable — "which routes are public?" |
+| `brain_get_subgraph` | One tab's nodes and edges by id |
+| `brain_get_graph` | The full merged graph, optionally filtered by node type |
+| `brain_get_agent_rules` | The content `brain:generate-rules` would write, for any target, without writing it |
+| `brain_rescan` | Re-scans and persists a fresh graph — every other tool reads whatever was scanned last |
+
+Every tool reads the last persisted scan, not the live filesystem — call `brain_rescan` after code changes before trusting the rest. Set `LARAVEL_BRAIN_MCP_ENABLED=false` to disable the server without removing the package.
+
+---
+
 ### Watch mode
 
 Re-scan automatically whenever a PHP file changes:
@@ -506,7 +539,7 @@ storage/app/laravel-brain/
 
 ## Security
 
-The `/_laravel-brain` routes are only registered in the `local` environment by default. Since it's a `require-dev` dependency, it will not be present in production builds (`composer install --no-dev`).
+The `/_laravel-brain` routes, the artisan commands, and the MCP server are all only registered in the `local` environment by default. Since it's a `require-dev` dependency, it will not be present in production builds (`composer install --no-dev`).
 
 If you do install it in a non-production environment accessible over a network, consider protecting the routes with middleware.
 

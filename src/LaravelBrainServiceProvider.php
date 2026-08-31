@@ -8,6 +8,9 @@ use Illuminate\Support\ServiceProvider;
 use LaraMint\LaravelBrain\Commands\ExportContextCommand;
 use LaraMint\LaravelBrain\Commands\GenerateRulesCommand;
 use LaraMint\LaravelBrain\Commands\ScanCommand;
+use LaraMint\LaravelBrain\Mcp\BrainMcpServer;
+use Laravel\Mcp\Facades\Mcp;
+use Laravel\Mcp\Server;
 
 class LaravelBrainServiceProvider extends ServiceProvider
 {
@@ -61,5 +64,28 @@ class LaravelBrainServiceProvider extends ServiceProvider
         $this->loadViewsFrom(__DIR__.'/../resources/views', 'laravel-brain');
         $this->commands([ScanCommand::class, ExportContextCommand::class, GenerateRulesCommand::class]);
         $this->loadRoutesFrom(__DIR__.'/../routes/brain.php');
+        $this->registerMcpServer();
+    }
+
+    /**
+     * Register the "brain" MCP server, reachable via `php artisan mcp:start brain`, so an
+     * AI client can query the last-scanned graph interactively.
+     *
+     * Only takes effect when the optional laravel/mcp package is installed (see
+     * composer.json "suggest") — a class_exists() probe, the same pattern already used at
+     * runtime in BrainController::stressTest() for the optional laravel-stress integration.
+     * A user who never installs laravel/mcp sees no change at all.
+     */
+    private function registerMcpServer(): void
+    {
+        if (! class_exists(Server::class)) {
+            return;
+        }
+
+        if (! (bool) config('laravel-brain.mcp.enabled', true)) {
+            return;
+        }
+
+        Mcp::local('brain', BrainMcpServer::class);
     }
 }
