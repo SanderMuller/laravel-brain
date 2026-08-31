@@ -25,8 +25,6 @@ interface Props {
   onSelect: (tab: TabEntry) => void
   mode: 'routes' | 'risks' | 'recent'
   onModeChange: (m: 'routes' | 'risks' | 'recent') => void
-  highRiskCount: number
-  recentCount: number
   previousAnalyzedAt?: string
   visibleTypes: Set<string>
   counts: Record<string, number>
@@ -411,7 +409,7 @@ function FlagCard({ tab, isActive, onSelect, timestamp }: {
 
 export function LeftSidebar({
   tabs, activeId, loadingId, onSelect,
-  mode, onModeChange, highRiskCount, recentCount, previousAnalyzedAt,
+  mode, onModeChange, previousAnalyzedAt,
   visibleTypes, counts, onToggle, onShowAll, onHideAll,
 }: Props) {
   const [width, setWidth] = useState(DEFAULT_WIDTH)
@@ -467,9 +465,12 @@ export function LeftSidebar({
 
   const query = search.trim().toLowerCase()
 
-  const tree = useMemo(() => {
+  // The search box and the method chips filter the sidebar, all three modes of it. Applied once
+  // here so that every list below and every count beside a mode name comes from the same set —
+  // they used to be derived separately, and only the route tree was filtered at all.
+  const filteredTabs = useMemo(() => {
     const allMethodsVisible = ALL_HTTP_METHODS.every((m) => visibleMethods.has(m))
-    const filtered = tabs.filter((t) => {
+    return tabs.filter((t) => {
       if (query && !t.label.toLowerCase().includes(query)) return false
       if (!allMethodsVisible) {
         const firstWord = t.label.split(' ')[0]
@@ -477,25 +478,31 @@ export function LeftSidebar({
       }
       return true
     })
-    return buildTree(filtered)
   }, [tabs, query, visibleMethods])
 
+  const isFiltering = query.length > 0 || !ALL_HTTP_METHODS.every((m) => visibleMethods.has(m))
+
+  const tree = useMemo(() => buildTree(filteredTabs), [filteredTabs])
+
   const riskTabs = useMemo(
-    () => tabs
+    () => filteredTabs
       .filter((t) => riskOf(t) !== 'none')
       .sort((a, b) => (RISK_ORDER[riskOf(b)] ?? 0) - (RISK_ORDER[riskOf(a)] ?? 0)),
-    [tabs],
+    [filteredTabs],
   )
 
   const recentTabs = useMemo(
-    () => tabs.filter((t) => t.changeStatus === 'new' || t.changeStatus === 'changed'),
-    [tabs],
+    () => filteredTabs.filter((t) => t.changeStatus === 'new' || t.changeStatus === 'changed'),
+    [filteredTabs],
   )
 
+  // Counted from the very lists they label, rather than from separately computed props. That is
+  // what made them disagree: `Risks` showed the parent's high-and-critical tally above a list of
+  // everything flagged, so the two differed whenever a route was medium or low risk.
   const modeTabs: { id: 'routes' | 'risks' | 'recent'; label: string; count: number }[] = [
-    { id: 'routes', label: 'Routes', count: tabs.length },
-    { id: 'risks', label: 'Risks', count: highRiskCount },
-    { id: 'recent', label: 'Recent', count: recentCount },
+    { id: 'routes', label: 'Routes', count: filteredTabs.length },
+    { id: 'risks', label: 'Risks', count: riskTabs.length },
+    { id: 'recent', label: 'Recent', count: recentTabs.length },
   ]
 
   return (
@@ -578,7 +585,11 @@ export function LeftSidebar({
 
           {mode === 'risks' && (
             <div className="flag-list">
-              {riskTabs.length === 0 && <div className="left-empty">No flagged routes. ✓</div>}
+              {riskTabs.length === 0 && (
+                <div className="left-empty">
+                  {isFiltering ? 'No flagged routes match the filter.' : 'No flagged routes. ✓'}
+                </div>
+              )}
               {riskTabs.map((tab) => (
                 <FlagCard key={tab.id} tab={tab} isActive={tab.id === activeId} onSelect={onSelect} />
               ))}
@@ -588,7 +599,11 @@ export function LeftSidebar({
           {mode === 'recent' && (
             <div className="flag-list">
               {recentTabs.length === 0 && (
-                <div className="left-empty">Nothing changed since the previous scan.</div>
+                <div className="left-empty">
+                  {isFiltering
+                    ? 'Nothing matching the filter changed since the previous scan.'
+                    : 'Nothing changed since the previous scan.'}
+                </div>
               )}
               {recentTabs.map((tab) => (
                 <FlagCard
