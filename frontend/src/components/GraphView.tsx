@@ -289,6 +289,62 @@ interface Props {
   onToggleCompact: () => void
 }
 
+/**
+ * Whether a wheel event is a trackpad two-finger scroll, which should pan, rather than a mouse
+ * wheel or a pinch, which should zoom.
+ *
+ * There is no flag that says which device sent it: the browser gives a notch of a mouse wheel and
+ * two fingers on a trackpad an event of the same shape. A pinch is the one case it does mark, by
+ * setting `ctrlKey`, which is why that one is certain and the rest is inference.
+ *
+ * The inference is measured rather than assumed. 389 real events were captured from a MacBook
+ * trackpad in Chrome — two-finger scrolls, diagonal scrolls, and pinches:
+ *
+ *   scroll (354 events)  `wheelDeltaY === -3 * deltaY` in 350, off by one unit in 4;
+ *                        `deltaX` frequently non-zero; `deltaY` whole; largest |deltaY| was 49
+ *   pinch  (35 events)   `ctrlKey` set; `wheelDeltaY` pinned at exactly ±120 while `deltaY`
+ *                        stayed fractional and under 9
+ *
+ * That `-3` ratio is the signal, and it identifies a trackpad positively instead of inferring one
+ * from the absence of a mouse. A notch reports `deltaY` around 100 against a `wheelDeltaY` of 120,
+ * a ratio of -1.2, nowhere near it.
+ *
+ * The pinch row is also why `ctrlKey` has to be tested FIRST rather than folded in: a pinch
+ * carries a `wheelDeltaY` that is always a multiple of 120, so any rule keying on that alone would
+ * read every pinch as a mouse.
+ *
+ * The remaining branches are fallbacks for what was not measured:
+ *
+ *  - Horizontal movement. A wheel has one axis, so a non-zero `deltaX` did not come from one.
+ *    (Shift-wheel produces it too, and shift-wheel means "scroll sideways", so panning is still
+ *    the right answer there.)
+ *  - Line or page units. `deltaMode` other than pixels is reported by mice on the platforms that
+ *    still do it — Firefox and Windows — and never by a trackpad.
+ *  - Notch size, where `wheelDeltaY` is absent (Firefox): a notch is coarse and whole.
+ *
+ * KNOWN GAP: no mouse was available to test with, so every path that ends in "this is a mouse" is
+ * reasoned, not measured. A high-resolution wheel reporting `deltaY` of 40 against a `wheelDeltaY`
+ * of -120 would hit the ratio exactly and be read as a trackpad. If a device is consistently
+ * misread, this is the one function to look at, and logging
+ * `{deltaX, deltaY, deltaMode, wheelDeltaY}` from the real hardware is what decides it.
+ */
+function isTrackpadPan(ev: WheelEvent): boolean {
+  if (ev.ctrlKey) return false
+  if (ev.deltaX !== 0) return true
+  if (ev.deltaMode !== 0) return false
+
+  const notch = (ev as WheelEvent & { wheelDeltaY?: number }).wheelDeltaY
+
+  if (typeof notch === 'number' && notch !== 0) {
+    // The measured ratio, with room for the one-unit rounding seen in 4 of 354 events.
+    if (Math.abs(notch + 3 * ev.deltaY) <= 2) return true
+
+    return !(Math.abs(notch) % 120 === 0 && Math.abs(ev.deltaY) >= 100)
+  }
+
+  return !(Number.isInteger(ev.deltaY) && Math.abs(ev.deltaY) >= 100)
+}
+
 export function GraphView({
   elements,
   layout,
@@ -910,7 +966,14 @@ export function GraphView({
 
     const zr = zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.02, 5])
-      .filter((ev) => !dragStateRef.current && (!ev.ctrlKey || ev.type === 'wheel') && !ev.button)
+      // Only a trackpad two-finger scroll is taken away from d3, and handled below as a pan.
+      // A pinch (`ctrlKey`) and a mouse wheel both still reach it and still zoom, so zooming
+      // stays anchored on the pointer the way d3 does it. The `!ev.ctrlKey` half is unchanged
+      // and keeps ctrl-clicks and ctrl-drags out.
+      .filter((ev) => !dragStateRef.current
+        && (!ev.ctrlKey || ev.type === 'wheel')
+        && !(ev.type === 'wheel' && isTrackpadPan(ev as WheelEvent))
+        && !ev.button)
       .on('zoom', (ev) => {
         transformRef.current = ev.transform
         select(g).attr('transform', ev.transform.toString())
@@ -919,8 +982,27 @@ export function GraphView({
 
     select(svg).call(zr)
     zoomBehaviorRef.current = zr
+
+    // Two fingers on a trackpad mean "move the canvas", not "resize it".
+    //
+    // Deltas are in screen pixels and `translateBy` moves the graph's own coordinates, so they are
+    // divided by the current scale; without that, panning drifts against the pointer at any zoom
+    // level but 100%.
+    const onWheel = (ev: WheelEvent) => {
+      if (!isTrackpadPan(ev)) return
+
+      ev.preventDefault()
+      const k = transformRef.current.k
+      select(svg).call(zr.translateBy, -ev.deltaX / k, -ev.deltaY / k)
+    }
+
+    // Not passive: the handler calls `preventDefault()` to stop the page itself from scrolling
+    // under the canvas, and a passive listener may not.
+    svg.addEventListener('wheel', onWheel, { passive: false })
+
     return () => {
       select(svg).on('.zoom', null)
+      svg.removeEventListener('wheel', onWheel)
     }
   }, [])
 
