@@ -312,11 +312,24 @@ class ContextExporter
         $sourceParts = [];
         $nodesForSource = $ctx->nodes;
 
+        // Nodes name files far more often than files exist: a class and its methods, a resource
+        // and its pages, all carry the same path. Emitting per node would put one file's whole
+        // contents in the export once for every node that names it — and every copy is spent
+        // out of the budget the rest of this method exists to respect.
+        $emitted = [];
+
         foreach ($nodesForSource as $i => $node) {
-            $source = $this->readSource((string) ($node['data']['file'] ?? ''));
+            $file = (string) ($node['data']['file'] ?? '');
+            if ($file !== '' && isset($emitted[$file])) {
+                continue;
+            }
+
+            $source = $this->readSource($file);
             if ($source === '') {
                 continue;
             }
+
+            $emitted[$file] = true;
 
             $isFocal = $i === 0;
             $label = (string) $node['label'];
