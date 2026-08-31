@@ -66,6 +66,12 @@ class ProjectAnalyzer
 
     private GraphSplitter $graphSplitter;
 
+    /** @var string[] */
+    private array $bindingProviderPaths = ContainerBindingAnalyzer::DEFAULT_PROVIDER_PATHS;
+
+    /** @var string[] */
+    private array $facadePaths = FacadeAnalyzer::DEFAULT_PATHS;
+
     /** @var callable(string, array): void */
     private $onProgress;
 
@@ -131,6 +137,17 @@ class ProjectAnalyzer
             trustedRouteUris: $this->stringList(config('laravel-brain.security.trusted_route_uris', [])),
         );
         $this->graphBuilder = new GraphBuilder;
+        $bindingProviderPaths = config(
+            'laravel-brain.container_bindings.provider_paths',
+            ContainerBindingAnalyzer::DEFAULT_PROVIDER_PATHS,
+        );
+        $this->bindingProviderPaths = is_array($bindingProviderPaths)
+            ? $bindingProviderPaths
+            : ContainerBindingAnalyzer::DEFAULT_PROVIDER_PATHS;
+
+        $facadePaths = config('laravel-brain.facades.paths', FacadeAnalyzer::DEFAULT_PATHS);
+        $this->facadePaths = is_array($facadePaths) ? $facadePaths : FacadeAnalyzer::DEFAULT_PATHS;
+
         $livewirePaths = config('laravel-brain.livewire.component_paths', []);
         if (is_array($livewirePaths) && $livewirePaths !== []) {
             $this->graphBuilder->setLivewireComponentPaths($livewirePaths);
@@ -417,12 +434,12 @@ class ProjectAnalyzer
         $this->emit('step:done', ['step' => 'security', 'count' => $issueCount, 'unit' => 'issue', 'message' => "    Found {$issueCount} security issue(s) across ".count($securityMap).' route(s)']);
 
         $this->emit('step:start', ['step' => 'container_bindings', 'label' => 'Scanning service providers', 'message' => '  → Scanning service providers (IoC bindings)...']);
-        $bindingRegistry = (new ContainerBindingAnalyzer)->analyze($projectRoot);
+        $bindingRegistry = (new ContainerBindingAnalyzer(null, $this->bindingProviderPaths))->analyze($projectRoot);
         $bindingCount = count($bindingRegistry->all());
         $this->emit('step:done', ['step' => 'container_bindings', 'count' => $bindingCount, 'unit' => 'binding', 'message' => "    Found {$bindingCount} container binding(s)"]);
 
         $this->emit('step:start', ['step' => 'facades', 'label' => 'Scanning facades', 'message' => '  → Scanning application facades...']);
-        $facadeRegistry = (new FacadeAnalyzer)->analyze($projectRoot);
+        $facadeRegistry = (new FacadeAnalyzer(null, $this->facadePaths))->analyze($projectRoot);
         $facadeRegistry->resolveWith($bindingRegistry);
         $facadeCount = count($facadeRegistry->all());
         $this->emit('step:done', ['step' => 'facades', 'count' => $facadeCount, 'unit' => 'facade', 'message' => "    Found {$facadeCount} facade(s)"]);

@@ -284,6 +284,23 @@ From each controller action (and Filament page method), the tracer follows:
 
 This produces the full edge list used to build the graph.
 
+### Service providers and facades
+
+Container registrations (`bind()`, `singleton()`, `scoped()` and their `*If` variants, plus the `$bindings` property) are read from service providers, and application-level facades — classes whose inheritance chain reaches `Illuminate\Support\Facades\Facade` — from the application's source tree. Both feed the graph: an edge that lands on an interface or an abstract class is wired through to the concrete class bound to it, and a facade call is wired through to the class behind its accessor.
+
+Both directories default to the standard skeleton and take glob patterns, so an application whose providers and facades live in packages points them at its own layout:
+
+```php
+// config/laravel-brain.php
+'container_bindings' => [
+    'provider_paths' => ['app-modules/*/src'],
+],
+
+'facades' => [
+    'paths' => ['app-modules/*/src'],
+],
+```
+
 ### Filament PHP support
 
 When Filament is installed, the scanner discovers every panel registered via service providers, then resolves its resources, pages, widgets, and relation managers — both explicitly listed (`->resources([...])`) and auto-discovered (`->discoverResources(for: '...')`). Filament page methods are traced through the same call-chain engine as controller actions, so models and services they touch appear in the graph.

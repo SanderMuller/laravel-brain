@@ -18,35 +18,48 @@ use PhpParser\NodeTraverser;
 use PhpParser\NodeVisitorAbstract;
 
 /**
- * Scans app/Providers for Laravel container registrations (bind/singleton/scoped and $bindings).
+ * Scans service providers for Laravel container registrations (bind/singleton/scoped
+ * and $bindings).
  */
 final class ContainerBindingAnalyzer
 {
+    /**
+     * Where providers live in a default Laravel skeleton.
+     *
+     * @var string[]
+     */
+    public const DEFAULT_PROVIDER_PATHS = ['app/Providers'];
+
     private PhpFileParser $parser;
+
+    /** @var string[] provider directories, relative to the project root */
+    private array $providerPaths;
 
     /** @var list<string> */
     private const BIND_METHODS = ['bind', 'singleton', 'scoped', 'bindIf', 'singletonIf', 'scopedIf'];
 
-    public function __construct(?PhpFileParser $parser = null)
-    {
+    /**
+     * @param  string[]  $providerPaths  provider directories, relative to the project root;
+     *                                   glob patterns are expanded
+     */
+    public function __construct(
+        ?PhpFileParser $parser = null,
+        array $providerPaths = self::DEFAULT_PROVIDER_PATHS,
+    ) {
         $this->parser = $parser ?? new PhpFileParser;
+        $this->providerPaths = $providerPaths;
     }
 
     public function analyze(string $projectRoot): ContainerBindingRegistry
     {
         $registry = new ContainerBindingRegistry;
         $root = rtrim($projectRoot, '/');
-        if (! is_dir($root.'/app/Providers')) {
-            return $registry;
-        }
+        $directories = SourceDirectories::resolve($root, $this->providerPaths);
 
-        $files = [];
-        foreach ([$root.'/app/Providers/*.php', $root.'/app/Providers/**/*.php'] as $pattern) {
-            foreach (glob($pattern) ?: [] as $file) {
-                $files[$file] = true;
-            }
-        }
-        $paths = array_keys($files);
+        // Recursive, where this used to be `*.php` plus `**/*.php`: PHP's glob does not
+        // cross directory separators, so the second pattern reached exactly one level down
+        // and a provider nested any deeper was silently skipped.
+        $paths = iterator_to_array(SourceDirectories::phpFiles($root, $directories), false);
         sort($paths);
 
         foreach ($paths as $file) {
