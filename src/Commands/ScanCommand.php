@@ -15,23 +15,29 @@ class ScanCommand extends Command
     protected $signature = 'brain:scan
                             {--watch : Watch for PHP file changes and auto-rescan}
                             {--interval=3 : Poll interval in seconds (watch mode only)}
-                            {--memory-limit=1024M : Increase memory limit for scanning. Example: 1024M}
+                            {--memory-limit= : Memory limit for scanning, e.g. 1024M, 2G or -1. Defaults to config laravel-brain.memory_limit}
                             {--auto-discover : Force auto-discover routes mode for this scan (overrides config)}';
 
     protected $description = 'Analyze this Laravel project and open the interactive graph viewer';
+
+    /** The limit used when neither the option nor the config names one. */
+    public const DEFAULT_MEMORY_LIMIT = '1024M';
 
     /** @var array<string, float> step start times */
     private array $stepTimers = [];
 
     public function handle(): int
     {
-        $memoryLimit = $this->normalizeMemoryLimit($this->option('memory-limit'));
+        $memoryLimit = $this->normalizeMemoryLimit(
+            $this->option('memory-limit') ?? config('laravel-brain.memory_limit', self::DEFAULT_MEMORY_LIMIT),
+        );
 
         if ($memoryLimit === self::FAILURE) {
             return $memoryLimit;
         }
 
         ini_set('memory_limit', $memoryLimit);
+        $this->reportMemoryExhaustionOnShutdown((string) $memoryLimit);
 
         $projectPath = base_path();
 
@@ -40,6 +46,31 @@ class ScanCommand extends Command
         }
 
         return $this->runScan($projectPath, verbose: true);
+    }
+
+    /**
+     * Say so when the scan dies of memory exhaustion.
+     *
+     * PHP exits 255 on that fatal and, with `display_errors` off, prints nothing — the
+     * progress line simply stops. Registering the check at shutdown is the only place the
+     * fatal is still readable, and the reserve is released first so there is heap left to
+     * write the line with.
+     */
+    private function reportMemoryExhaustionOnShutdown(string $limitInEffect): void
+    {
+        $reserve = str_repeat(' ', MemoryExhaustionNotice::RESERVE_BYTES);
+
+        register_shutdown_function(function () use (&$reserve, $limitInEffect): void {
+            // Released first: with the heap full there is otherwise nothing to build a
+            // message with, and PHP's own report cannot render either.
+            $reserve = null;
+
+            $notice = MemoryExhaustionNotice::forLastError(error_get_last(), $limitInEffect);
+            if ($notice !== null) {
+                $this->newLine();
+                $this->error($notice);
+            }
+        });
     }
 
     // ── Watch mode ────────────────────────────────────────────────────────────

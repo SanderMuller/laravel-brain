@@ -63,6 +63,22 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Memory Limit
+    // -------------------------------------------------------------------------
+    // Memory the scan runs with, applied before analysis starts. Accepts the PHP
+    // notation (1024M, 2G) or -1 for no limit; the minimum accepted is 1024M.
+    //
+    // A scan holds the whole graph plus a parsed AST cache, so a large application
+    // needs more than the default. When it does not fit, PHP kills the process — the
+    // scan reports that and names this setting rather than exiting silently.
+    //
+    // `--memory-limit` on the command overrides this for a single run.
+    //
+    // Override via the LARAVEL_BRAIN_MEMORY_LIMIT env variable.
+    //
+    'memory_limit' => env('LARAVEL_BRAIN_MEMORY_LIMIT', '1024M'),
+
+    // -------------------------------------------------------------------------
     // Auto-Discover Routes
     // -------------------------------------------------------------------------
     // When true, RouteAnalyzer skips AST parsing of route_paths and instead

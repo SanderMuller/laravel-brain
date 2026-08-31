@@ -331,6 +331,27 @@ Stress testing uses [`laramint/laravel-stress`](https://github.com/LaraMint/lara
 
 Single-label hostnames (Docker service names with no dots) and private IPv4 ranges are automatically allowed by the host validator, so pointing the Base URL at your internal network address will work without any extra config.
 
+## Memory
+
+A scan holds the whole graph and a parsed-AST cache at once, so a large application needs more than the 1024M default. When it does not fit, PHP kills the process — and with nothing to allocate, neither PHP's own error report nor anything else can render, so the run ends mid-step at exit 255 with no output at all.
+
+The scan holds a small reserve back for exactly that moment: it releases it at shutdown and says what happened and what to change.
+
+```
+The scan ran out of memory at --memory-limit=1024M. Raise it (--memory-limit=2048M),
+lift it entirely (--memory-limit=-1), or set `memory_limit` in config/laravel-brain.php
+so every scan of this project gets the larger value.
+```
+
+Set it once per project rather than remembering the flag:
+
+```php
+// config/laravel-brain.php
+'memory_limit' => env('LARAVEL_BRAIN_MEMORY_LIMIT', '2048M'),
+```
+
+`--memory-limit` still overrides it for a single run.
+
 ## Storage Driver
 
 Scan output (the graph) can be persisted in one of two ways, selected with the
