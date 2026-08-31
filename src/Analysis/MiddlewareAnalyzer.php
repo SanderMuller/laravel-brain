@@ -200,11 +200,75 @@ class MiddlewareAnalyzer
 
                 if (in_array($methodName, ['api', 'web'], true)) {
                     $this->groups[$methodName] = $this->extractAppendList($node);
+                } elseif ($methodName === 'group') {
+                    // `$middleware->group('admin', [...])` — how an application declares a group
+                    // of its own. The framework's own `web` and `api` are modified through the
+                    // methods above; every other group is born here.
+                    $this->declareGroup($node);
+                } elseif (in_array($methodName, ['appendToGroup', 'prependToGroup'], true)) {
+                    $this->addToGroup($node, $methodName === 'prependToGroup');
                 } elseif ($methodName === 'alias') {
                     $this->extractAliases($node);
                 }
 
                 return null;
+            }
+
+            /** `group(string $group, array $middleware)` — the whole membership, replacing any of it read so far. */
+            private function declareGroup(Node\Expr\MethodCall $node): void
+            {
+                $name = $this->groupNameArg($node);
+                if ($name === null || ! ($node->args[1] ?? null) instanceof Node\Arg) {
+                    return;
+                }
+
+                $members = $node->args[1]->value;
+                if ($members instanceof Node\Expr\Array_) {
+                    $this->groups[$name] = $this->extractClassArray($members);
+                }
+            }
+
+            /**
+             * `appendToGroup(string $group, array|string $middleware)` and its prepend twin. Laravel
+             * wraps a bare string, so `appendToGroup('web', Guard::class)` is one member, not none.
+             */
+            private function addToGroup(Node\Expr\MethodCall $node, bool $prepend): void
+            {
+                $name = $this->groupNameArg($node);
+                if ($name === null || ! ($node->args[1] ?? null) instanceof Node\Arg) {
+                    return;
+                }
+
+                $value = $node->args[1]->value;
+                $members = $value instanceof Node\Expr\Array_
+                    ? $this->extractClassArray($value)
+                    : array_filter([$this->extractClassString($value)]);
+
+                if ($members === []) {
+                    return;
+                }
+
+                $existing = $this->groups[$name] ?? [];
+                $this->groups[$name] = $prepend
+                    ? array_merge($members, $existing)
+                    : array_merge($existing, $members);
+            }
+
+            /**
+             * The group name a `group`-family call names, or null when it is not a literal — a
+             * variable or a constant is a name this cannot read, and guessing one would attribute
+             * middleware to a group that does not exist.
+             */
+            private function groupNameArg(Node\Expr\MethodCall $node): ?string
+            {
+                // First-class callable syntax puts a VariadicPlaceholder here, which has no `value`.
+                if (! ($node->args[0] ?? null) instanceof Node\Arg) {
+                    return null;
+                }
+
+                $name = $node->args[0]->value;
+
+                return $name instanceof Node\Scalar\String_ && $name->value !== '' ? $name->value : null;
             }
 
             private function extractAppendList(Node\Expr\MethodCall $node): array
