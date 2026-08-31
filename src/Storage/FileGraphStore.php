@@ -66,6 +66,17 @@ final class FileGraphStore implements GraphStore
         return $ids;
     }
 
+    public function pruneSubgraphsExcept(array $keep): void
+    {
+        $keep = array_flip($keep);
+
+        foreach ($this->subgraphIds() as $tabId) {
+            if (! isset($keep[$tabId])) {
+                @unlink($this->path($tabId));
+            }
+        }
+    }
+
     private function path(string $tabId): string
     {
         return $this->dir.'/.graph-'.$tabId.'.json';

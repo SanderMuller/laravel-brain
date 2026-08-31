@@ -35,4 +35,16 @@ interface GraphStore
      * @return list<string>
      */
     public function subgraphIds(): array;
+
+    /**
+     * Drop every stored subgraph whose tab id is not in $keep.
+     *
+     * A scan writes the complete set of tabs, so anything already stored and not
+     * written by it belongs to a route, command or channel that no longer exists.
+     * Left behind, those blobs keep answering {@see subgraphIds()} and the viewer
+     * goes on listing tabs for a surface the application dropped.
+     *
+     * @param  list<string>  $keep  tab ids the current scan wrote
+     */
+    public function pruneSubgraphsExcept(array $keep): void;
 }

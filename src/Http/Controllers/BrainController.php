@@ -57,6 +57,11 @@ class BrainController extends Controller
             $store->putSubgraph((string) $tabId, $subgraph->toJson());
         }
 
+        // Ordering matters: the manifest above is what the viewer indexes tabs from, and it
+        // is written unconditionally, so pruning to the same set that produced it can only
+        // remove blobs nothing can address. Moving either out of this block breaks that.
+        $store->pruneSubgraphsExcept(array_map('strval', array_keys($result->subgraphs)));
+
         return response()->json([
             'success' => true,
             'message' => 'Project scan completed successfully.',

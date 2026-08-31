@@ -262,6 +262,13 @@ class ScanCommand extends Command
             $store->putSubgraph((string) $tabId, $subgraph->toJson());
         }
 
+        // Both a full and a scoped rescan split the whole graph, so what was just written
+        // is the complete tab set; anything else in the store outlived its route.
+        // Ordering matters: the manifest above is what the viewer indexes tabs from, and it
+        // is written unconditionally, so pruning to the same set that produced it can only
+        // remove blobs nothing can address. Moving either out of this block breaks that.
+        $store->pruneSubgraphsExcept(array_map('strval', array_keys($result->subgraphs)));
+
         // The one-time support prompt flag lives on disk regardless of driver.
         $storageDir = storage_path('app/laravel-brain');
         if (! is_dir($storageDir)) {

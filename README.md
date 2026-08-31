@@ -429,7 +429,10 @@ With the default `file` driver, `brain:scan` writes these files to
 .graph-{tab-id}.json   — Per-route subgraph (one per route)
 ```
 
-They are regenerated on every scan and are safe to gitignore:
+Every scan rewrites the whole set and drops the subgraphs it did not write, so a tab
+disappears from the viewer when the route behind it disappears from the application.
+
+They are safe to gitignore:
 
 ```gitignore
 storage/app/laravel-brain/
