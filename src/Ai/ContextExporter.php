@@ -303,12 +303,17 @@ class ContextExporter
         $structural = implode("\n", $parts);
         $charBudget -= strlen($structural);
 
-        // Source snippets (budget-gated, focal node first)
+        // Source snippets (budget-gated, focal node first).
+        //
+        // Read from the file each node names. This used to read `data['source']`, which no
+        // analyzer ever fills with code — the only writer put a command's provenance there —
+        // so the whole budget-gated path emitted nothing on 8,454 of one project's 10,142
+        // nodes and a ```php block containing the word "class" on the remaining 113.
         $sourceParts = [];
         $nodesForSource = $ctx->nodes;
 
         foreach ($nodesForSource as $i => $node) {
-            $source = (string) ($node['data']['source'] ?? '');
+            $source = $this->readSource((string) ($node['data']['file'] ?? ''));
             if ($source === '') {
                 continue;
             }
@@ -343,6 +348,30 @@ class ContextExporter
         }
 
         return $structural.implode("\n", $sourceParts);
+    }
+
+    /**
+     * The contents of a file a node names, or '' when there is nothing safe to read.
+     *
+     * Confined to the project being analysed: node paths come from the scan, but an export is
+     * something a person hands to a model, and reading outside the tree is not a mistake worth
+     * being able to make.
+     */
+    private function readSource(string $file): string
+    {
+        if ($file === '' || ! is_file($file) || ! is_readable($file)) {
+            return '';
+        }
+
+        if ($this->projectPath !== '') {
+            $root = realpath(rtrim($this->projectPath, '/'));
+            $real = realpath($file);
+            if ($root === false || $real === false || ! str_starts_with($real, $root.DIRECTORY_SEPARATOR)) {
+                return '';
+            }
+        }
+
+        return (string) file_get_contents($file);
     }
 
     // ── JSON serializer ───────────────────────────────────────────────────────
