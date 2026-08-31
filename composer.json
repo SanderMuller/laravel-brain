@@ -45,7 +45,8 @@
             "@test:lint",
             "@test:unit",
             "@test:types"
-        ]
+        ],
+        "benchmark": "php benchmark/benchmark.php"
     },
     "extra": {
         "laravel": {
