@@ -40,15 +40,22 @@ class ExportContextCommand extends Command
         $exporter = new ContextExporter($store, base_path());
 
         try {
-            $requestedBudget = (int) $this->option('budget');
+            $rawBudget = (string) $this->option('budget');
+            $requestedBudget = (int) $rawBudget;
             $budget = max(self::MINIMUM_BUDGET, $requestedBudget);
 
             // Silently exporting more than was asked for is worse than saying so: the header
             // of the export itself reports the budget, and it would report a number the
             // caller never chose.
+            //
+            // On stderr, not stdout — stdout is the export. See {@see DiagnosticStream}.
+            // And quoting back what was typed rather than what it cast to: `--budget=abc` is 0
+            // as an int, and "asked for 0" names a number nobody wrote.
             if ($budget !== $requestedBudget) {
-                $this->components->warn(
-                    "Budget raised to the {$budget}-token minimum (asked for {$requestedBudget})."
+                $asked = is_numeric($rawBudget) ? $rawBudget : '"'.$rawBudget.'"';
+
+                DiagnosticStream::for($this->output->getOutput())->writeln(
+                    "<comment>Budget raised to the {$budget}-token minimum (asked for {$asked}).</comment>"
                 );
             }
 
