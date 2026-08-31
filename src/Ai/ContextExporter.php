@@ -17,6 +17,11 @@ class ContextExporter
         'filament_panel', 'filament_resource', 'filament_page', 'filament_widget', 'filament_relation_manager',
     ];
 
+    /**
+     * How much of what is left after the structural essentials the dependency tables may take.
+     */
+    private const PACKAGE_BUDGET_SHARE = 0.15;
+
     public function __construct(
         private readonly GraphStore $store,
         private readonly string $projectPath = '',
@@ -273,35 +278,27 @@ class ContextExporter
             $parts[] = '';
         }
 
-        // Backend packages (composer.json)
-        $composerPackages = $this->readComposerPackages();
-        if (! empty($composerPackages)) {
-            $parts[] = '## Backend Packages (composer.json)';
-            $parts[] = '| Package | Version | Dev |';
-            $parts[] = '|---------|---------|-----|';
-            foreach ($composerPackages as ['name' => $name, 'version' => $version, 'dev' => $dev]) {
-                $devMark = $dev ? 'yes' : '';
-                $parts[] = "| {$name} | {$version} | {$devMark} |";
-            }
-            $parts[] = '';
-        }
-
-        // Frontend packages (package.json)
-        $frontendPackages = $this->readFrontendPackages();
-        if (! empty($frontendPackages)) {
-            $parts[] = '## Frontend Packages (package.json)';
-            $parts[] = '| Package | Version | Dev |';
-            $parts[] = '|---------|---------|-----|';
-            foreach ($frontendPackages as ['name' => $name, 'version' => $version, 'dev' => $dev]) {
-                $devMark = $dev ? 'yes' : '';
-                $parts[] = "| {$name} | {$version} | {$devMark} |";
-            }
-            $parts[] = '';
-        }
-
         // Pre-budget structural content (always included)
         $structural = implode("\n", $parts);
         $charBudget -= strlen($structural);
+
+        // The dependency lists say what the project has installed, not what the focal node
+        // does, and on a large application they are long enough to be the whole export: a
+        // route asked for at 500 tokens came back at 1,264, of which 87% was these two
+        // tables and none was code. They get a share of what is left and no more.
+        $packageBudget = (int) ($charBudget * self::PACKAGE_BUDGET_SHARE);
+        $packages = $this->packageSection(
+            '## Backend Packages (composer.json)',
+            $this->readComposerPackages(),
+            $packageBudget,
+        );
+        $packages .= $this->packageSection(
+            '## Frontend Packages (package.json)',
+            $this->readFrontendPackages(),
+            $packageBudget - strlen($packages),
+        );
+        $structural .= $packages;
+        $charBudget -= strlen($packages);
 
         // Source snippets (budget-gated, focal node first).
         //
@@ -348,6 +345,47 @@ class ContextExporter
         }
 
         return $structural.implode("\n", $sourceParts);
+    }
+
+    /**
+     * One dependency table, as much of it as $charBudget allows.
+     *
+     * Truncated rather than dropped: knowing the project runs Filament at all is worth a few
+     * lines, and the count says plainly what was left out instead of implying the list is whole.
+     *
+     * @param  list<array{name: string, version: string, dev: bool}>  $packages
+     */
+    private function packageSection(string $heading, array $packages, int $charBudget): string
+    {
+        if ($packages === [] || $charBudget <= 0) {
+            return '';
+        }
+
+        $rows = [$heading, '| Package | Version | Dev |', '|---------|---------|-----|'];
+        $used = strlen(implode("\n", $rows));
+        $shown = 0;
+
+        foreach ($packages as ['name' => $name, 'version' => $version, 'dev' => $dev]) {
+            $row = '| '.$name.' | '.$version.' | '.($dev ? 'yes' : '').' |';
+            if ($used + strlen($row) + 1 > $charBudget) {
+                break;
+            }
+            $rows[] = $row;
+            $used += strlen($row) + 1;
+            $shown++;
+        }
+
+        if ($shown === 0) {
+            return '';
+        }
+
+        $omitted = count($packages) - $shown;
+        if ($omitted > 0) {
+            $rows[] = "| …and {$omitted} more | | |";
+        }
+        $rows[] = '';
+
+        return "\n".implode("\n", $rows);
     }
 
     /**
