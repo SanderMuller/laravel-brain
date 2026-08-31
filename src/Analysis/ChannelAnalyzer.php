@@ -25,14 +25,35 @@ class ChannelAnalyzer
     /** @var string[] */
     private array $channelPaths;
 
+    /** @var string[] class names, short or fully qualified */
+    private array $registrars;
+
     /**
      * @param  string[]  $channelPaths  Glob patterns relative to the project root.
      *                                  Only files whose basename contains "channel" are parsed.
+     * @param  string[]  $registrars  Additional classes whose static channel() call registers
+     *                                a channel, on top of Broadcast. An application that wraps
+     *                                the facade — to scope channels to a tenant, say — registers
+     *                                every one of its channels through its own class, and none
+     *                                of them are Broadcast::channel() calls.
      */
-    public function __construct(array $channelPaths = ['routes/*/*.php'])
+    public function __construct(array $channelPaths = ['routes/*/*.php'], array $registrars = [])
     {
         $this->parser = new PhpFileParser;
         $this->channelPaths = $channelPaths ?: ['routes/*/*.php'];
+        $this->registrars = array_values(array_unique(array_merge(
+            ['Broadcast'],
+            array_map(static fn (string $registrar): string => self::shortName($registrar), $registrars),
+        )));
+    }
+
+    /** Compare registrars by short name: an import may be aliased, a call may be qualified. */
+    private static function shortName(string $class): string
+    {
+        $class = trim($class, '\\');
+        $position = strrpos($class, '\\');
+
+        return $position === false ? $class : substr($class, $position + 1);
     }
 
     /**
@@ -100,13 +121,17 @@ class ChannelAnalyzer
     private function extractChannels(array $ast, array $useMap, string $file): array
     {
         $traverser = new NodeTraverser;
-        $visitor = new class($file, $useMap) extends NodeVisitorAbstract
+        $visitor = new class($file, $useMap, $this->registrars) extends NodeVisitorAbstract
         {
             public array $channels = [];
 
+            /**
+             * @param  string[]  $registrars
+             */
             public function __construct(
                 private string $file,
                 private array $useMap,
+                private array $registrars,
             ) {}
 
             public function enterNode(Node $node): ?int
@@ -119,7 +144,7 @@ class ChannelAnalyzer
                 if (! $node->class instanceof Node\Name) {
                     return null;
                 }
-                if ($node->class->getLast() !== 'Broadcast') {
+                if (! in_array($node->class->getLast(), $this->registrars, true)) {
                     return null;
                 }
 

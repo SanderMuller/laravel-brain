@@ -251,6 +251,29 @@ php artisan brain:scan --auto-discover
 
 > **Heads up:** in auto-discover mode the source file and line number of each route are not available, so the sidebar will not group routes by their declaring file (everything falls under a single group). Use the default AST mode if file/line grouping matters to you.
 
+### Modular applications
+
+Class names are resolved through the PSR-4 map built from the root `composer.json` **and** from every local package: packages installed from a `path` repository, and nwidart/laravel-modules under `Modules/`. An application whose code lives in packages rather than in `app/` therefore resolves normally — without it, classes are discovered and then dropped, because no file can be found for them.
+
+Regular vendor dependencies are deliberately left out of that map, so the call-chain tracer never walks into framework or library internals.
+
+### Artisan commands
+
+A command is recognised however it names itself: a `$signature` (or the older `$name`) property, Laravel's `#[Signature]` / `#[Description]` attributes, or Symfony's `#[AsCommand]`. A property wins over an attribute, matching Laravel's own precedence.
+
+Scheduled tasks are read from `routes/console.php` and from a schedule split into its own `routes/schedule.php`, in both the `Schedule::command()` and `$schedule->command()` spellings, along with `job()` and `call()` entries and the cadence each one is chained with.
+
+### Broadcast channels
+
+Channels registered through the `Broadcast` facade are found out of the box. If your application registers them through a wrapper of its own — one that scopes every channel to a tenant, for instance — name that class in `channel_registrars` and its `::channel()` calls are read the same way:
+
+```php
+// config/laravel-brain.php
+'channel_registrars' => [
+    App\Broadcasting\TenantChannel::class,
+],
+```
+
 ### Call chain tracing
 
 From each controller action (and Filament page method), the tracer follows:

@@ -509,67 +509,12 @@ class ControllerAnalyzer
         );
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     private function buildPsr4Map(string $projectRoot): array
     {
-        $composerJson = $projectRoot.'/composer.json';
-        if (! file_exists($composerJson)) {
-            return [];
-        }
-
-        $data = json_decode(file_get_contents($composerJson), true);
-        $map = [];
-
-        foreach (['autoload', 'autoload-dev'] as $section) {
-            foreach ($data[$section]['psr-4'] ?? [] as $namespace => $paths) {
-                $ns = rtrim($namespace, '\\');
-                foreach ((array) $paths as $path) {
-                    $map[$ns][] = rtrim($projectRoot.'/'.$path, '/');
-                }
-            }
-        }
-
-        // Scan nwidart/laravel-modules: each Modules/{Name}/composer.json may declare its own PSR-4 map.
-        // Also infer the conventional mapping Modules\{Name} → Modules/{Name}/ for older module structures.
-        $modulesDir = $projectRoot.'/Modules';
-        if (is_dir($modulesDir)) {
-            foreach (scandir($modulesDir) as $modName) {
-                if ($modName === '.' || $modName === '..') {
-                    continue;
-                }
-                $modPath = $modulesDir.'/'.$modName;
-                if (! is_dir($modPath)) {
-                    continue;
-                }
-
-                // Read module's own composer.json for explicit PSR-4 entries
-                $modComposer = $modPath.'/composer.json';
-                if (file_exists($modComposer)) {
-                    $modData = json_decode(file_get_contents($modComposer), true);
-                    foreach (['autoload', 'autoload-dev'] as $section) {
-                        foreach ($modData[$section]['psr-4'] ?? [] as $namespace => $paths) {
-                            $ns = rtrim($namespace, '\\');
-                            foreach ((array) $paths as $path) {
-                                $map[$ns][] = rtrim($modPath.'/'.$path, '/');
-                            }
-                        }
-                    }
-                }
-
-                // Conventional fallback: Modules\{Name} → Modules/{Name}/
-                // Covers both old structure (Http/ directly) and new structure (app/)
-                $ns = 'Modules\\'.$modName;
-                if (! isset($map[$ns])) {
-                    // New nwidart structure: Modules/{Name}/app/
-                    if (is_dir($modPath.'/app')) {
-                        $map[$ns] = [$modPath.'/app'];
-                    } else {
-                        $map[$ns] = [$modPath];
-                    }
-                }
-            }
-        }
-
-        return $map;
+        return ComposerPsr4Map::build($projectRoot);
     }
 
     private function resolveFile(string $fqcn, string $projectRoot): ?string

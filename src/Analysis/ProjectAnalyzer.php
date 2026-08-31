@@ -76,7 +76,11 @@ class ProjectAnalyzer
         $this->routeAnalyzer = new RouteAnalyzer($routePaths, $autoDiscover, $excludeVendor);
 
         $channelPaths = config('laravel-brain.channel_paths', ['routes/*/*.php']);
-        $this->channelAnalyzer = new ChannelAnalyzer($channelPaths);
+        $channelRegistrars = config('laravel-brain.channel_registrars', []);
+        $this->channelAnalyzer = new ChannelAnalyzer(
+            is_array($channelPaths) ? $channelPaths : [],
+            $this->stringList($channelRegistrars),
+        );
 
         $listenerPaths = config('laravel-brain.listeners.paths', ['app/Listeners']);
         $providerPaths = config('laravel-brain.listeners.provider_paths', ['app/Providers']);

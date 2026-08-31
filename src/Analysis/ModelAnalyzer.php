@@ -513,25 +513,12 @@ class ModelAnalyzer
         return array_values(array_unique($dirs));
     }
 
+    /**
+     * @return array<string, string[]>
+     */
     private function buildPsr4Map(string $projectRoot): array
     {
-        $composerJson = $projectRoot.'/composer.json';
-        if (! file_exists($composerJson)) {
-            return [];
-        }
-
-        $data = json_decode(file_get_contents($composerJson), true);
-        $map = [];
-        foreach (['autoload', 'autoload-dev'] as $section) {
-            foreach ($data[$section]['psr-4'] ?? [] as $ns => $paths) {
-                $key = rtrim($ns, '\\');
-                foreach ((array) $paths as $path) {
-                    $map[$key][] = rtrim($projectRoot.'/'.$path, '/');
-                }
-            }
-        }
-
-        return $map;
+        return ComposerPsr4Map::build($projectRoot);
     }
 
     private function resolveFile(string $fqcn, string $projectRoot, array $psr4Map): ?string
