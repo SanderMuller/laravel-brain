@@ -1,0 +1,8 @@
+{
+    "name": "test/resource-payloads",
+    "autoload": {
+        "psr-4": {
+            "App\\": "app/"
+        }
+    }
+}
