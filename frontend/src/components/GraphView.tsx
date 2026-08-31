@@ -351,7 +351,7 @@ export function GraphView({
     else if (kind === 'circle') {
       const r = Math.min(280, 90 + nodesCopy.length * 4)
       layoutCircle(nodesCopy, r)
-    } else layoutGrid(nodesCopy, 200, 130)
+    } else layoutGrid(nodesCopy)
 
     centerNodes(nodesCopy)
     return { nodes: nodesCopy, edges: edgesCopy }
