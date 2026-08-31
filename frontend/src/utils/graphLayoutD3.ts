@@ -272,9 +272,20 @@ export function layoutForce(nodes: LayoutNode[], edges: LayoutEdge[]): void {
   }
 }
 
-export function layoutCircle(nodes: LayoutNode[], radius: number): void {
+export function layoutCircle(nodes: LayoutNode[], gap = 40): void {
   const n = nodes.length
   if (!n) return
+
+  // The radius has to come from the cards, not from a constant. Nodes sit at uniform angles,
+  // so each gets `2πr / n` of arc — a fixed radius therefore shrinks the space per card as
+  // cards are added, which is backwards. The caller used `min(280, 90 + n * 4)`, so twenty
+  // 185-270px cards were placed 53px apart and the ring was a pile.
+  //
+  // Every card gets the same arc, so it is sized for the largest, and by its longer side:
+  // which side faces the tangent depends on where on the ring a card sits.
+  const arc = Math.max(...nodes.map((node) => Math.max(node.width, node.height))) + gap
+  const radius = Math.max(arc, (n * arc) / (2 * Math.PI))
+
   nodes.forEach((node, i) => {
     const a = (i / n) * Math.PI * 2 - Math.PI / 2
     node.x = radius * Math.cos(a)
