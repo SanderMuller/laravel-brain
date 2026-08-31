@@ -54,12 +54,15 @@ jobs:
 
       # Laravel 9/10 cells (matrix.phpstan == false): the modern dev toolchain
       # requires Laravel 11+. Larastan 3 needs L11+; Testbench 7/8 pins PHPUnit 9
-      # which conflicts with Pest 2's PHPUnit 10. The tests use plain
-      # PHPUnit\Framework\TestCase (no Orchestra), so drop Larastan + Testbench
-      # and downgrade Pest to ^2 so the suite can install on these versions.
-      - name: Drop Larastan & Testbench (unsupported on Laravel < 11)
+      # which conflicts with Pest 2's PHPUnit 10; laravel/mcp requires
+      # symfony/process ^7.4.5|^8.0.5, which never overlaps with the
+      # symfony/process ^6.x that Laravel <11 itself requires, on any PHP
+      # version. The tests use plain PHPUnit\Framework\TestCase (no Orchestra)
+      # and laravel/mcp is an optional require-dev-only integration, so drop
+      # all three and downgrade Pest to ^2 so the suite can install here.
+      - name: Drop Larastan, Testbench & laravel/mcp (unsupported on Laravel < 11)
         if: ${{ !matrix.phpstan }}
-        run: composer remove --dev --no-update --no-interaction larastan/larastan orchestra/testbench
+        run: composer remove --dev --no-update --no-interaction larastan/larastan orchestra/testbench laravel/mcp
 
       # Pest 2 (PHPUnit 10) for L9/L10. symfony/polyfill-php85 provides the
       # native-PHP-8.5 array_first() used by tests/Pest.php — the modern dev

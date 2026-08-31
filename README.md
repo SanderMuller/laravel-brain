@@ -198,7 +198,7 @@ It's an optional, auto-detected add-on — install [Laravel's own MCP package](h
 composer require --dev laravel/mcp
 ```
 
-Requires Laravel 10+ and PHP 8.1+. Nothing else in Brain needs either — this is the only feature gated on them, and skipping this package leaves everything else untouched.
+Requires Laravel 11+ (`laravel/mcp` needs `symfony/process ^7.4.5|^8.0.5`, which conflicts with the `symfony/process ^6.x` that Laravel 9/10 themselves require — PHP version isn't the limiter here). Nothing else in Brain needs this — it's the only feature gated on it, and skipping this package leaves everything else untouched.
 
 Register the server with your MCP client (e.g. Claude Code):
 

@@ -20,7 +20,7 @@
     },
     "suggest": {
         "laramint/laravel-security-scanner": "Install in your app (--dev) to replace Brain's built-in source security rules with the more rigorous taint-based scanner. Brain auto-detects vendor/bin/php-security-scanner and falls back to built-in rules if absent.",
-        "laravel/mcp": "Install to enable `php artisan mcp:start brain` — lets Claude Code, Cursor, and other MCP clients query the last-scanned dependency graph interactively instead of re-exporting a static snapshot. Brain auto-detects it; the server simply doesn't register if it's absent. Requires Laravel 10+ / PHP 8.1+."
+        "laravel/mcp": "Install to enable `php artisan mcp:start brain` — lets Claude Code, Cursor, and other MCP clients query the last-scanned dependency graph interactively instead of re-exporting a static snapshot. Brain auto-detects it; the server simply doesn't register if it's absent. Requires Laravel 11+ (laravel/mcp needs symfony/process ^7.4.5|^8.0.5, which conflicts with the symfony/process ^6.x that Laravel 9/10 themselves require)."
     },
     "autoload": {
         "psr-4": {
