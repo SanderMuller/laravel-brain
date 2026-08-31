@@ -1,0 +1,211 @@
+# How It Works
+
+What `brain:scan` actually does, in order — and how to point every analyzer at a non-standard layout.
+
+```
+php artisan brain:scan
+        │
+        ├─ RouteAnalyzer      → scans all files in routes/**/*.php
+        ├─ MiddlewareAnalyzer → reads Kernel.php or bootstrap/app.php
+        ├─ ControllerAnalyzer → resolves controller classes + methods
+        ├─ MethodTracer       → deep-traces call chains (services, repos, models)
+        ├─ ModelAnalyzer      → extracts Eloquent relationships
+        ├─ QueryTracer        → surfaces DB queries per method
+        ├─ ConsoleAnalyzer    → discovers Artisan commands and scheduled tasks
+        ├─ ChannelAnalyzer    → discovers broadcast channels
+        ├─ FilamentAnalyzer   → discovers panels, resources, pages, widgets, relation managers
+        └─ GraphBuilder       → assembles nodes + edges, flags fat classes
+                │
+                └─ Writes JSON → storage/app/laravel-brain/
+
+GET /_laravel-brain
+        │
+        └─ BrainController → serves the React SPA + graph JSON via Laravel routes
+```
+
+## Route discovery
+
+Laravel Brain recursively scans your entire `routes/` directory — not just `web.php` and `api.php`. Any PHP file under `routes/**` is analyzed, including versioned files like `routes/v1/users.php` or module-specific files like `routes/modules/admin.php`.
+
+### Auto-discover mode
+
+Set `'auto_discover_routes' => true` in `config/laravel-brain.php` to skip AST parsing and pull routes from the live Laravel router (`Route::getRoutes()`) instead. This captures routes registered programmatically by service providers and packages (Filament, Sanctum, Livewire, Telescope, etc.) that the AST scanner can't see.
+
+By default, routes whose handler (controller class or closure) lives under your project's `vendor/` directory are excluded — so package-internal routes such as Telescope, Horizon, or Ignition stay out of the graph. Flip `'auto_discover_exclude_vendor' => false` if you want them included.
+
+Both settings are env-overridable, so you can toggle them per-environment without editing the published config file:
+
+```dotenv
+LARAVEL_BRAIN_AUTO_DISCOVER_ROUTES=true
+LARAVEL_BRAIN_AUTO_DISCOVER_EXCLUDE_VENDOR=false
+```
+
+To force auto-discover for a single scan without changing config, pass the flag:
+
+```bash
+php artisan brain:scan --auto-discover
+```
+
+::: warning Heads up
+In auto-discover mode the source file and line number of each route are not available, so the sidebar will not group routes by their declaring file (everything falls under a single group). Use the default AST mode if file/line grouping matters to you.
+:::
+
+## Modular applications
+
+Class names are resolved through the PSR-4 map built from the root `composer.json` **and** from every local package: packages installed from a `path` repository, and nwidart/laravel-modules under `Modules/`. An application whose code lives in packages rather than in `app/` therefore resolves normally — without it, classes are discovered and then dropped, because no file can be found for them.
+
+Regular vendor dependencies are deliberately left out of that map, so the call-chain tracer never walks into framework or library internals.
+
+## Artisan commands
+
+A command is recognised however it names itself: a `$signature` (or the older `$name`) property, Laravel's `#[Signature]` / `#[Description]` attributes, or Symfony's `#[AsCommand]`. A property wins over an attribute, matching Laravel's own precedence.
+
+Scheduled tasks are read from `routes/console.php` and from a schedule split into its own `routes/schedule.php`, in both the `Schedule::command()` and `$schedule->command()` spellings, along with `job()` and `call()` entries and the cadence each one is chained with.
+
+## Broadcast channels
+
+Channels registered through the `Broadcast` facade are found out of the box. If your application registers them through a wrapper of its own — one that scopes every channel to a tenant, for instance — name that class in `channel_registrars` and its `::channel()` calls are read the same way:
+
+```php
+// config/laravel-brain.php
+'channel_registrars' => [
+    App\Broadcasting\TenantChannel::class,
+],
+```
+
+## Call chain tracing
+
+From each controller action (and Filament page method), the tracer follows:
+- Direct method calls to injected services/repositories
+- Static calls (`MyService::method()`)
+- Job dispatches (`dispatch(new SendEmail(...))`)
+- Event dispatches (`event(new OrderPlaced(...))`)
+
+This produces the full edge list used to build the graph.
+
+## Blade views
+
+Templates are scanned to link a view to the views it `@include`s or renders as a component, and a view name is resolved back to its file the same way. Both read the same list, so an application that keeps templates in packages points them there once:
+
+```php
+// config/laravel-brain.php
+'views' => [
+    'paths' => ['resources/views', 'app-modules/*/resources/views'],
+],
+```
+
+An include is linked when the template exists under *any* configured root, so one package rendering another's partial is still an edge.
+
+## Source paths and watch mode
+
+Two lists drive everything that is not an analyzer of its own:
+
+```php
+'source_paths' => ['app', 'src'],              // where application classes live
+'watch_paths'  => ['app', 'routes', 'config'], // what can change the graph
+```
+
+`source_paths` backs the last-resort file lookup — the by-file-name search Brain falls back to when Composer's PSR-4 map cannot place a class name — and marks the part of the tree a scoped rescan may be limited to.
+
+`watch_paths` is what `brain:scan --watch` polls and what the build fingerprint hashes. A change confined to `source_paths` can be handled by a scoped rescan; a change anywhere else — a route file, a config file — forces a full rebuild.
+
+## Service providers and facades
+
+Container registrations (`bind()`, `singleton()`, `scoped()` and their `*If` variants, plus the `$bindings` property) are read from service providers, and application-level facades — classes whose inheritance chain reaches `Illuminate\Support\Facades\Facade` — from the application's source tree. Both feed the graph: an edge that lands on an interface or an abstract class is wired through to the concrete class bound to it, and a facade call is wired through to the class behind its accessor.
+
+Both directories default to the standard skeleton and take glob patterns, so an application whose providers and facades live in packages points them at its own layout:
+
+```php
+// config/laravel-brain.php
+'container_bindings' => [
+    'provider_paths' => ['app-modules/*/src'],
+],
+
+'facades' => [
+    'paths' => ['app-modules/*/src'],
+],
+```
+
+## Filament PHP support
+
+When Filament is installed, the scanner discovers every panel registered via service providers, then resolves its resources, pages, widgets, and relation managers — both explicitly listed (`->resources([...])`) and auto-discovered (`->discoverResources(for: '...')`). Filament page methods are traced through the same call-chain engine as controller actions, so models and services they touch appear in the graph.
+
+Resources and relation managers are recognised through their whole `extends` chain, so a project base class (`class OrderResource extends AppResource`, `AppResource extends Resource`) does not hide them.
+
+Applications that keep their Filament classes somewhere other than `app/Filament` — a modular monolith with no `app/` directory, for instance — point the scanner at their own layout. An entry is used as-is when it is a directory and expanded as a glob pattern otherwise:
+
+```php
+// config/laravel-brain.php
+'filament' => [
+    'panel_paths' => ['app-modules/*/src/Filament'],
+    'paths' => ['app-modules/*/src/Filament'],
+],
+```
+
+A file named `*PanelProvider.php` is treated as a panel by convention. Any other file counts as a panel only when it actually builds a `Panel::make()` chain, so pointing `panel_paths` at a whole source tree does not turn every class into a panel.
+
+## Graph Node Types
+
+| Node | Accent Color | Represents |
+|------|-------------|------------|
+| Route | <span class="color-dot" style="background:#4CAF50"></span> Green `#4CAF50` | HTTP endpoint (`GET /users`) |
+| Middleware | <span class="color-dot" style="background:#FF9800"></span> Orange `#FF9800` | Middleware applied to a route |
+| Controller | <span class="color-dot" style="background:#2196F3"></span> Blue `#2196F3` | Controller class |
+| Action | <span class="color-dot" style="background:#03A9F4"></span> Light Blue `#03A9F4` | Controller method |
+| Service | <span class="color-dot" style="background:#9C27B0"></span> Purple `#9C27B0` | Service or helper class |
+| Model | <span class="color-dot" style="background:#F44336"></span> Red `#F44336` | Eloquent model |
+| Event | <span class="color-dot" style="background:#FFD600"></span> Yellow `#FFD600` | Laravel event |
+| Job | <span class="color-dot" style="background:#607D8B"></span> Slate `#607D8B` | Queued job |
+| Filament Panel | <span class="color-dot" style="background:#7C3AED"></span> Violet `#7C3AED` | Filament panel definition |
+| Filament Resource | <span class="color-dot" style="background:#A855F7"></span> Purple `#A855F7` | Filament resource class |
+| Filament Page | <span class="color-dot" style="background:#C084FC"></span> Lavender `#C084FC` | Filament page class |
+| Filament Page Method | <span class="color-dot" style="background:#E879F9"></span> Pink `#E879F9` | Method on a Filament page |
+| Filament Widget | <span class="color-dot" style="background:#06B6D4"></span> Cyan `#06B6D4` | Filament widget class |
+| Filament Relation Manager | <span class="color-dot" style="background:#0891B2"></span> Teal `#0891B2` | Filament relation manager |
+
+::: tip Note
+Command, Schedule, Channel, and Repository nodes are discovered and added to the graph but use the closest matching accent color from their parent type.
+:::
+
+## Routes Registered
+
+The package registers the following routes in your application (all under the `/_laravel-brain` prefix):
+
+```
+GET  /_laravel-brain                          → Interactive graph viewer (SPA)
+GET  /_laravel-brain/api/source               → Returns PHP source file content
+POST /_laravel-brain/api/scan                 → Triggers a full project scan
+GET  /_laravel-brain/api/context              → Exports a deterministic AI context snapshot
+POST /_laravel-brain/api/generate-rules       → Generates AI assistant rules files
+POST /_laravel-brain/api/stress-test          → Starts a stress-test job (or returns sync result)
+GET  /_laravel-brain/api/stress-test/{id}     → Polls background job status/results
+GET  /_laravel-brain/assets/*                 → Serves frontend static assets
+GET  /_laravel-brain/.graph-*.json            → Serves graph data written by the scan
+```
+
+::: tip
+The last two rows aren't separate route registrations — `routes/brain.php` defines a single catch-all `GET /{any?}` route that serves both static SPA assets and `.graph-*.json` files, falling through to the SPA shell for everything else.
+:::
+
+Stress testing uses [`laramint/laravel-stress`](https://github.com/LaraMint/laravel-stress), installed automatically as a dependency — see [Usage → Route stress testing](/usage.md#route-stress-testing) for the host allowlist.
+
+## Memory
+
+A scan holds the whole graph and a parsed-AST cache at once, so a large application needs more than the 1024M default. When it does not fit, PHP kills the process — and with nothing to allocate, neither PHP's own error report nor anything else can render, so the run ends mid-step at exit 255 with no output at all.
+
+The scan holds a small reserve back for exactly that moment: it releases it at shutdown and says what happened and what to change.
+
+```
+The scan ran out of memory at --memory-limit=1024M. Raise it (--memory-limit=2048M),
+lift it entirely (--memory-limit=-1), or set `memory_limit` in config/laravel-brain.php
+so every scan of this project gets the larger value.
+```
+
+Set it once per project rather than remembering the flag:
+
+```php
+// config/laravel-brain.php
+'memory_limit' => env('LARAVEL_BRAIN_MEMORY_LIMIT', '2048M'),
+```
+
+`--memory-limit` still overrides it for a single run.
