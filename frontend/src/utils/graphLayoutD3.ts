@@ -215,7 +215,7 @@ export function layoutBreadthFirst(
     if (rankDir === 'TB') {
       const rowWidth =
         layerNodes.reduce((sum, n) => sum + n.width, 0) + gapWithinLayer * (layerNodes.length - 1)
-      const rowHeight = Math.max(...layerNodes.map((n) => n.height))
+      const rowHeight = largestOf(layerNodes, (n) => n.height)
       let x = -rowWidth / 2
       for (const node of layerNodes) {
         node.x = x + node.width / 2
@@ -226,7 +226,7 @@ export function layoutBreadthFirst(
     } else {
       const columnHeight =
         layerNodes.reduce((sum, n) => sum + n.height, 0) + gapWithinLayer * (layerNodes.length - 1)
-      const columnWidth = Math.max(...layerNodes.map((n) => n.width))
+      const columnWidth = largestOf(layerNodes, (n) => n.width)
       let y = -columnHeight / 2
       for (const node of layerNodes) {
         node.x = cursor + columnWidth / 2
@@ -272,6 +272,18 @@ export function layoutForce(nodes: LayoutNode[], edges: LayoutEdge[]): void {
   }
 }
 
+/**
+ * The largest value a callback yields over the nodes, without spreading them onto the stack.
+ *
+ * `Math.max(...array)` passes every element as an argument and throws `RangeError` past roughly
+ * 124,000 of them. Nothing observed comes close — the largest single tab measured across three
+ * applications is 177 nodes and the largest whole graph around 10,000 — so this is not a fix for
+ * a bug anyone has hit. It is one line either way, and a layout that throws is a blank screen.
+ */
+function largestOf(nodes: LayoutNode[], of: (node: LayoutNode) => number): number {
+  return nodes.reduce((largest, node) => Math.max(largest, of(node)), -Infinity)
+}
+
 export function layoutCircle(nodes: LayoutNode[], gap = 40): void {
   const n = nodes.length
   if (!n) return
@@ -283,7 +295,7 @@ export function layoutCircle(nodes: LayoutNode[], gap = 40): void {
   //
   // Every card gets the same arc, so it is sized for the largest, and by its longer side:
   // which side faces the tangent depends on where on the ring a card sits.
-  const arc = Math.max(...nodes.map((node) => Math.max(node.width, node.height))) + gap
+  const arc = largestOf(nodes, (node) => Math.max(node.width, node.height)) + gap
   const radius = Math.max(arc, (n * arc) / (2 * Math.PI))
 
   nodes.forEach((node, i) => {
@@ -296,8 +308,8 @@ export function layoutCircle(nodes: LayoutNode[], gap = 40): void {
 export function layoutGrid(nodes: LayoutNode[], gapX = 60, gapY = 60): void {
   if (!nodes.length) return
   // Same reasoning as the layered layout: a fixed 200-wide cell clipped the 270-wide cards.
-  const cellW = Math.max(...nodes.map((n) => n.width)) + gapX
-  const cellH = Math.max(...nodes.map((n) => n.height)) + gapY
+  const cellW = largestOf(nodes, (n) => n.width) + gapX
+  const cellH = largestOf(nodes, (n) => n.height) + gapY
   const cols = Math.ceil(Math.sqrt(nodes.length))
   nodes.forEach((node, i) => {
     node.x = (i % cols) * cellW

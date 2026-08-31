@@ -126,10 +126,6 @@ export default function App() {
     () => routeTabs.filter((t) => t.riskLevel === 'high' || t.riskLevel === 'critical').length,
     [routeTabs],
   )
-  const recentCount = useMemo(
-    () => routeTabs.filter((t) => t.changeStatus === 'new' || t.changeStatus === 'changed').length,
-    [routeTabs],
-  )
 
   const typeCounts = useMemo(() => {
     if (!tabState.data) return {} as Record<string, number>
@@ -256,8 +252,6 @@ export default function App() {
           onSelect={handleSelectTab}
           mode={sidebarMode}
           onModeChange={setSidebarMode}
-          highRiskCount={highRiskCount}
-          recentCount={recentCount}
           previousAnalyzedAt={manifest.previousAnalyzedAt}
           visibleTypes={visibleTypes}
           counts={typeCounts}
