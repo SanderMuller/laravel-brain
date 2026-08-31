@@ -287,14 +287,24 @@ class ContextExporter
         // route asked for at 500 tokens came back at 1,264, of which 87% was these two
         // tables and none was code. They get a share of what is left and no more.
         $packageBudget = (int) ($charBudget * self::PACKAGE_BUDGET_SHARE);
+
+        // Split, rather than first-come. Handing the whole share to the backend table let it
+        // spend all of it — on an application with 120 dependencies of each kind the frontend
+        // table was absent at every budget under 20,000, and an absent table is indistinguishable
+        // from a project that has no `package.json` at all. Whatever the first table leaves
+        // unspent rolls forward, so a project with only one of the two still gets the full share.
+        $backendPackages = $this->readComposerPackages();
+        $frontendPackages = $this->readFrontendPackages();
+        $firstShare = $frontendPackages === [] ? $packageBudget : intdiv($packageBudget, 2);
+
         $packages = $this->packageSection(
             '## Backend Packages (composer.json)',
-            $this->readComposerPackages(),
-            $packageBudget,
+            $backendPackages,
+            $firstShare,
         );
         $packages .= $this->packageSection(
             '## Frontend Packages (package.json)',
-            $this->readFrontendPackages(),
+            $frontendPackages,
             $packageBudget - strlen($packages),
         );
         $structural .= $packages;
@@ -327,16 +337,20 @@ class ContextExporter
                 break;
             }
 
+            // The marker is part of the snippet, so it has to be part of the arithmetic that
+            // sizes it. Appending it afterwards put every truncated export exactly its own length
+            // over the budget — 32 bytes, the em dash costing three of them — at every budget.
+            $marker = "\n// [truncated — token budget]";
             $available = $charBudget - $overhead;
             $truncated = false;
             if (strlen($source) > $available) {
-                $source = substr($source, 0, $available);
+                $source = substr($source, 0, max(0, $available - strlen($marker)));
                 $truncated = true;
             }
 
             $snippet = $header.$source;
             if ($truncated) {
-                $snippet .= "\n// [truncated — token budget]";
+                $snippet .= $marker;
             }
             $snippet .= $footer;
 
@@ -353,11 +367,15 @@ class ContextExporter
      * Truncated rather than dropped: knowing the project runs Filament at all is worth a few
      * lines, and the count says plainly what was left out instead of implying the list is whole.
      *
+     * A table that does not fit at all still leaves its heading and its count behind. An empty
+     * string would say the same thing as "this project has no `package.json`", and those are not
+     * the same thing — telling them apart is the whole reason the truncation row exists.
+     *
      * @param  list<array{name: string, version: string, dev: bool}>  $packages
      */
     private function packageSection(string $heading, array $packages, int $charBudget): string
     {
-        if ($packages === [] || $charBudget <= 0) {
+        if ($packages === []) {
             return '';
         }
 
@@ -376,7 +394,7 @@ class ContextExporter
         }
 
         if ($shown === 0) {
-            return '';
+            return "\n".$heading."\n| …all ".count($packages)." omitted — token budget | | |\n";
         }
 
         $omitted = count($packages) - $shown;
