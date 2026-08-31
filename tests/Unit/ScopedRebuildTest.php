@@ -82,6 +82,8 @@ afterEach(function () {
 function writeScopedSource(string $path, string $code): void
 {
     static $age = 900;
+    static $base = null;
+    $base ??= time();
 
     file_put_contents($path, $code);
 
@@ -91,7 +93,13 @@ function writeScopedSource(string $path, string $code): void
     // version's parse. The age used to walk toward the present and stop 10 seconds short of it,
     // which collided as soon as a run made enough writes to get there; walking the other way
     // cannot, and never reaches the present, which the cache treats as unsettled.
-    touch($path, time() - $age);
+    //
+    // The base is read once rather than per write. `time() - $age` moves both terms in the same
+    // direction: a write landing a second after the previous one repeats its mtime exactly, and
+    // a full build runs between the two writes in most of these tests, which on a slow runner
+    // takes that second. That is a real failure — twice in one CI matrix, `ScopedRebuildNotApplicable
+    // not thrown`, because the second build was answered from the first version's parse.
+    touch($path, $base - $age);
     $age++;
     clearstatcache(true, $path);
 }
