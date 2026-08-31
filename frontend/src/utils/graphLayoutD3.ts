@@ -161,13 +161,17 @@ export function layoutBreadthFirst(
   const level = new Map<string, number>()
   const q = [...roots]
   for (const r of roots) level.set(r, 0)
-  while (q.length) {
-    const u = q.shift()!
+  // Breadth-first: a node is levelled by the first path that reaches it, and never again.
+  // Keeping the deepest level instead makes every trip around a cycle a longer path, so the
+  // node is re-queued forever — and an inverse pair of Eloquent relations (hasMany plus its
+  // belongsTo) is a cycle, which is to say most model graphs contain one.
+  let head = 0
+  while (head < q.length) {
+    const u = q[head++]
     const lv = level.get(u)!
     for (const v of adj.get(u) ?? []) {
-      const nextLv = lv + 1
-      if (!level.has(v) || level.get(v)! < nextLv) {
-        level.set(v, nextLv)
+      if (!level.has(v)) {
+        level.set(v, lv + 1)
         q.push(v)
       }
     }
@@ -182,10 +186,11 @@ export function layoutBreadthFirst(
     layers.get(l)!.push(n.id)
   }
   for (const arr of layers.values()) arr.sort()
+  const byId = new Map(nodes.map((n) => [n.id, n]))
   for (const [, idsInLayer] of layers) {
     const l = level.get(idsInLayer[0])!
     idsInLayer.forEach((id, i) => {
-      const node = nodes.find((n) => n.id === id)!
+      const node = byId.get(id)!
       if (rankDir === 'TB') {
         node.x = i * spacingX - ((idsInLayer.length - 1) * spacingX) / 2
         node.y = l * spacingY
