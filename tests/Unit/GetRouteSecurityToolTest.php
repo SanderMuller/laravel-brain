@@ -1,6 +1,19 @@
 <?php
 
 use LaraMint\LaravelBrain\Mcp\Tools\GetRouteSecurityTool;
+use Laravel\Mcp\Server\Tool;
+
+// GetRouteSecurityTool extends Laravel\Mcp\Server\Tool. laravel/mcp is an
+// optional require-dev dependency (dropped entirely on Laravel < 11 in CI,
+// since it needs symfony/process ^7.4.5|^8.0.5, which conflicts with the
+// symfony/process ^6.x that Laravel < 11 itself requires) — so autoloading
+// GetRouteSecurityTool here would fatal wherever it isn't installed. Checking
+// the *parent* class, not GetRouteSecurityTool itself, is the load-bearing
+// part: class_exists() on GetRouteSecurityTool would autoload it and hit the
+// same fatal before this check could return false.
+if (! class_exists(Tool::class)) {
+    return;
+}
 
 /**
  * @param  list<array<string, mixed>>  $routeNodes
