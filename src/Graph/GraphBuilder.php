@@ -2031,7 +2031,10 @@ class GraphBuilder
                     'description' => $cmd->description,
                     'class' => $cmd->class,
                     'file' => $cmd->file,
-                    'source' => $cmd->source,
+                    // Where the definition was found ('class' | 'route' | 'kernel'). Not the
+                    // command's code: `source` read as source is what put the literal string
+                    // "class" into AI context exports inside a ```php fence.
+                    'definedIn' => $cmd->source,
                     'flowSteps' => $flowSteps,
                     'metrics' => $metrics ?: null,
                     'hasN1' => $hasN1,

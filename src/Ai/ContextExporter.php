@@ -303,15 +303,33 @@ class ContextExporter
         $structural = implode("\n", $parts);
         $charBudget -= strlen($structural);
 
-        // Source snippets (budget-gated, focal node first)
+        // Source snippets (budget-gated, focal node first).
+        //
+        // Read from the file each node names. This used to read `data['source']`, which no
+        // analyzer ever fills with code — the only writer put a command's provenance there —
+        // so the whole budget-gated path emitted nothing on 8,454 of one project's 10,142
+        // nodes and a ```php block containing the word "class" on the remaining 113.
         $sourceParts = [];
         $nodesForSource = $ctx->nodes;
 
+        // Nodes name files far more often than files exist: a class and its methods, a resource
+        // and its pages, all carry the same path. Emitting per node would put one file's whole
+        // contents in the export once for every node that names it — and every copy is spent
+        // out of the budget the rest of this method exists to respect.
+        $emitted = [];
+
         foreach ($nodesForSource as $i => $node) {
-            $source = (string) ($node['data']['source'] ?? '');
+            $file = (string) ($node['data']['file'] ?? '');
+            if ($file !== '' && isset($emitted[$file])) {
+                continue;
+            }
+
+            $source = $this->readSource($file);
             if ($source === '') {
                 continue;
             }
+
+            $emitted[$file] = true;
 
             $isFocal = $i === 0;
             $label = (string) $node['label'];
@@ -343,6 +361,30 @@ class ContextExporter
         }
 
         return $structural.implode("\n", $sourceParts);
+    }
+
+    /**
+     * The contents of a file a node names, or '' when there is nothing safe to read.
+     *
+     * Confined to the project being analysed: node paths come from the scan, but an export is
+     * something a person hands to a model, and reading outside the tree is not a mistake worth
+     * being able to make.
+     */
+    private function readSource(string $file): string
+    {
+        if ($file === '' || ! is_file($file) || ! is_readable($file)) {
+            return '';
+        }
+
+        if ($this->projectPath !== '') {
+            $root = realpath(rtrim($this->projectPath, '/'));
+            $real = realpath($file);
+            if ($root === false || $real === false || ! str_starts_with($real, $root.DIRECTORY_SEPARATOR)) {
+                return '';
+            }
+        }
+
+        return (string) file_get_contents($file);
     }
 
     // ── JSON serializer ───────────────────────────────────────────────────────
