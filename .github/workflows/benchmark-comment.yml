@@ -1,0 +1,70 @@
+name: Benchmark Comment
+
+# Posts what the Benchmark workflow measured. Split out because it needs a token
+# that can write to pull requests, which the benchmark job itself — running code
+# from the pull request — must not have.
+
+# The comment body is markdown produced by code from the pull request, so it is
+# untrusted: nothing from the artifact is interpolated into a shell command or a
+# workflow expression. The pull request number is checked to be a number, and the
+# body is handed to the action as a file. The comment this job looks for is found
+# by a fixed marker rather than by anything read out of the artifact.
+
+on:
+  workflow_run:
+    workflows: [Benchmark]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  comment:
+    name: Comment
+    if: >
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+
+    permissions:
+      actions: read
+      pull-requests: write
+
+    steps:
+      - name: Download the result
+        uses: actions/download-artifact@v8
+        with:
+          name: benchmark-result
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Read the pull request number
+        id: meta
+        run: |
+          # The artifact is produced by a workflow running pull request code, so
+          # nothing in it is trusted: the number has to be a number before it is
+          # used to address a comment.
+          number="$(sed -n '1p' benchmark-result.md)"
+
+          if ! [[ "$number" =~ ^[0-9]+$ ]]; then
+            echo "::error::first line of the artifact is not a pull request number"
+            exit 1
+          fi
+
+          echo "number=$number" >> "$GITHUB_OUTPUT"
+          tail -n +2 benchmark-result.md > benchmark-comment.md
+
+      - name: Find the existing comment
+        uses: peter-evans/find-comment@v4
+        id: find
+        with:
+          issue-number: ${{ steps.meta.outputs.number }}
+          comment-author: 'github-actions[bot]'
+          body-includes: '<!-- laravel-brain-benchmark -->'
+
+      - name: Post or update the comment
+        uses: peter-evans/create-or-update-comment@v5
+        with:
+          issue-number: ${{ steps.meta.outputs.number }}
+          comment-id: ${{ steps.find.outputs.comment-id }}
+          edit-mode: replace
+          body-path: benchmark-comment.md

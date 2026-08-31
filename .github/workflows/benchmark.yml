@@ -1,0 +1,138 @@
+name: Benchmark
+
+# Measures the pull request against its own merge base and writes the result to
+# an artifact. Commenting is a separate workflow (benchmark-comment.yml), because
+# this one runs with a read-only token so it is safe on pull requests from forks.
+
+on:
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'benchmark/**'
+      - 'composer.json'
+      - 'composer.lock'
+      - '.github/workflows/benchmark.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: benchmark-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  benchmark:
+    name: Benchmark
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      # Rounds of (base, head). Every round is a fresh process per arm; the arms
+      # alternate so machine load lands on both instead of on one of them.
+      ROUNDS: 5
+      # Timed repetitions inside one process, after one untimed warmup.
+      REPS: 2
+
+    steps:
+      - name: Checkout pull request
+        uses: actions/checkout@v7
+        with:
+          path: head
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Resolve merge base
+        id: mergebase
+        working-directory: head
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          # The PR's own merge base, not the current tip of the base branch:
+          # comparing against the tip reports other people's merges as this
+          # pull request's differences.
+          git fetch --no-tags origin "$BASE_REF"
+          sha="$(git merge-base HEAD FETCH_HEAD)"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Merge base: $sha"
+
+      - name: Checkout merge base
+        uses: actions/checkout@v7
+        with:
+          path: base
+          ref: ${{ steps.mergebase.outputs.sha }}
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: dom, curl, libxml, mbstring, zip
+          coverage: none
+
+      - name: Cache Composer downloads
+        uses: actions/cache@v6
+        with:
+          # A miss only costs the download, so both arms' lockfiles in the key is
+          # the whole of it — nothing about a measurement depends on this.
+          path: ~/.cache/composer/files
+          key: composer-benchmark-${{ hashFiles('head/composer.lock', 'base/composer.lock') }}
+          restore-keys: composer-benchmark-
+
+      - name: Install dependencies (pull request)
+        working-directory: head
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Install dependencies (merge base)
+        working-directory: base
+        run: composer install --no-interaction --no-progress --prefer-dist
+
+      - name: Generate the corpora
+        working-directory: head
+        run: |
+          # Both arms scan the same generated tree, so node/edge/parse-count
+          # deltas can only come from the code change. Generating it up front
+          # keeps generation out of the first measured round, and a broken
+          # harness fails here rather than halfway through the comparison.
+          php benchmark/benchmark.php \
+            --reps=1 --warmups=0 \
+            --corpus-dir="$RUNNER_TEMP/corpora" \
+            --out="$RUNNER_TEMP/discard.json"
+
+      - name: Run the arms, interleaved
+        working-directory: head
+        run: |
+          mkdir -p "$RUNNER_TEMP/arm-base" "$RUNNER_TEMP/arm-head"
+
+          for round in $(seq 1 "$ROUNDS"); do
+            for arm in base head; do
+              BRAIN_BENCH_AUTOLOAD="$GITHUB_WORKSPACE/$arm/vendor/autoload.php" \
+              php benchmark/benchmark.php \
+                --reps="$REPS" --warmups=1 \
+                --corpus-dir="$RUNNER_TEMP/corpora" \
+                --out="$RUNNER_TEMP/arm-$arm/round-$round.json"
+            done
+          done
+
+      - name: Render the comment
+        working-directory: head
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ steps.mergebase.outputs.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          # Line 1 is the pull request number, consumed by the comment workflow.
+          echo "$PR_NUMBER" > "$RUNNER_TEMP/benchmark-result.md"
+          php benchmark/compare.php \
+            "$RUNNER_TEMP/arm-base" "$RUNNER_TEMP/arm-head" \
+            --base-sha="$BASE_SHA" \
+            --head-sha="$HEAD_SHA" \
+            >> "$RUNNER_TEMP/benchmark-result.md"
+
+          # The same table on the run's own summary page, for anyone who lands
+          # there instead of on the pull request.
+          tail -n +2 "$RUNNER_TEMP/benchmark-result.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload the result
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-result
+          path: ${{ runner.temp }}/benchmark-result.md
