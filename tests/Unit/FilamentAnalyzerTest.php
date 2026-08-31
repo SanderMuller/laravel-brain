@@ -184,3 +184,140 @@ it('attaches the panel ID to discovered resources', function () {
         ->ToBeInstanceOf(FilamentResourceDefinition::class)
         ->panelId->toBe('admin');
 });
+
+// ── Configurable search paths (modular monolith, no app/ directory) ───────────
+
+it('finds nothing in a modular project while the default app/ paths are used', function () {
+    $result = (new FilamentAnalyzer)->analyze(fixture('filament-modular-project'));
+
+    expect($result['detected'])->toBeTrue()
+        ->and($result['panels'])->toBe([])
+        ->and($result['resources'])->toBe([])
+        ->and($result['pages'])->toBe([])
+        ->and($result['widgets'])->toBe([])
+        ->and($result['relationManagers'])->toBe([]);
+});
+
+it('expands glob patterns in the configured paths', function () {
+    $result = modularAnalyzer()->analyze(fixture('filament-modular-project'));
+
+    expect($result['resources'])
+        ->toHaveCount(1)
+        ->andArrayFirstElement()
+        ->ToBeInstanceOf(FilamentResourceDefinition::class)
+        ->fqcn->toBe('Modules\\Shop\\Filament\\Resources\\OrderResource')
+        ->modelFqcn->toBe('Modules\\Shop\\Models\\Order');
+});
+
+it('extracts a panel that is not named *PanelProvider', function () {
+    $result = modularAnalyzer()->analyze(fixture('filament-modular-project'));
+
+    expect($result['panels'])
+        ->toHaveCount(1)
+        ->andArrayFirstElement()
+        ->ToBeInstanceOf(FilamentPanelDefinition::class)
+        ->id->toBe('shop')
+        ->path->toBe('shop')
+        ->fqcn->toBe('Modules\\Shop\\Filament\\ShopPanel')
+        ->resources->toBe(['Modules\\Shop\\Filament\\Resources\\OrderResource']);
+});
+
+it('does not treat every class under a panel path as a panel', function () {
+    $result = modularAnalyzer()->analyze(fixture('filament-modular-project'));
+
+    $fqcns = array_map(fn (FilamentPanelDefinition $panel): string => $panel->fqcn, $result['panels']);
+
+    expect($fqcns)->not->toContain('Modules\\Shop\\Filament\\ShopTheme');
+});
+
+it('collects pages, widgets and relation managers across modules', function () {
+    $result = modularAnalyzer()->analyze(fixture('filament-modular-project'));
+
+    $pages = array_map(fn (FilamentPageDefinition $page): string => $page->fqcn, $result['pages']);
+    $widgets = array_map(fn (FilamentWidgetDefinition $widget): string => $widget->fqcn, $result['widgets']);
+    $managers = array_map(
+        fn (FilamentRelationManagerDefinition $manager): string => $manager->fqcn,
+        $result['relationManagers'],
+    );
+
+    expect($pages)->toContain('Modules\\Shop\\Filament\\Resources\\OrderResource\\Pages\\ListOrders')
+        ->and($pages)->toContain('Modules\\Blog\\Filament\\Pages\\BlogSettings')
+        ->and($widgets)->toBe(['Modules\\Shop\\Filament\\Widgets\\OrderStatsWidget'])
+        ->and($managers)->toBe([
+            'Modules\\Shop\\Filament\\Resources\\OrderResource\\RelationManagers\\ItemsRelationManager',
+        ]);
+});
+
+it('scans nothing when the configured paths are empty', function () {
+    $result = (new FilamentAnalyzer([], []))->analyze(fixture('filament-project'));
+
+    expect($result['detected'])->toBeTrue()
+        ->and($result['panels'])->toBe([])
+        ->and($result['resources'])->toBe([]);
+});
+
+it('recognises a resource and a relation manager that extend a project base class', function () {
+    $result = modularAnalyzer()->analyze(fixture('filament-modular-project'));
+
+    // OrderResource extends ShopResource extends Resource, and ItemsRelationManager
+    // extends ShopRelationManager extends RelationManager — a single-level `extends`
+    // check finds neither.
+    expect($result['resources'])
+        ->toHaveCount(1)
+        ->andArrayFirstElement()
+        ->fqcn->toBe('Modules\\Shop\\Filament\\Resources\\OrderResource');
+
+    expect($result['relationManagers'])
+        ->toHaveCount(1)
+        ->andArrayFirstElement()
+        ->fqcn->toBe('Modules\\Shop\\Filament\\Resources\\OrderResource\\RelationManagers\\ItemsRelationManager');
+});
+
+it('does not treat a plain class inside Resources/ as a resource', function () {
+    $result = modularAnalyzer()->analyze(fixture('filament-modular-project'));
+
+    $fqcns = array_map(fn (FilamentResourceDefinition $resource): string => $resource->fqcn, $result['resources']);
+
+    expect($fqcns)->not->toContain('Modules\\Shop\\Filament\\Resources\\OrderResourceHelper');
+});
+
+function modularAnalyzer(): FilamentAnalyzer
+{
+    return new FilamentAnalyzer(
+        panelPaths: ['app-modules/*/src/Filament'],
+        paths: ['app-modules/*/src/Filament'],
+    );
+}
+
+// ── A base class in the same namespace needs no import ───────────────────────
+
+function sameNamespaceAnalyzer(): FilamentAnalyzer
+{
+    return new FilamentAnalyzer(
+        panelPaths: ['app-modules/*/src/Filament'],
+        paths: ['app-modules/*/src/Filament'],
+    );
+}
+
+it('recognises a resource whose base class sits in its own namespace', function () {
+    // PHP needs no `use` for a class in the same namespace, so nobody writes one and the
+    // parent is a bare short name. Resolving it through the use map alone finds nothing.
+    $result = sameNamespaceAnalyzer()->analyze(fixture('filament-same-namespace-project'));
+
+    $fqcns = array_map(fn (FilamentResourceDefinition $r): string => $r->fqcn, $result['resources']);
+
+    expect($fqcns)->toContain('Modules\\Catalog\\Filament\\Resources\\ProductResource');
+});
+
+it('recognises a relation manager whose base class sits in its own namespace', function () {
+    $result = sameNamespaceAnalyzer()->analyze(fixture('filament-same-namespace-project'));
+
+    $fqcns = array_map(
+        fn (FilamentRelationManagerDefinition $m): string => $m->fqcn,
+        $result['relationManagers'],
+    );
+
+    expect($fqcns)->toContain(
+        'Modules\\Catalog\\Filament\\Resources\\ProductResource\\RelationManagers\\PricesRelationManager',
+    );
+});

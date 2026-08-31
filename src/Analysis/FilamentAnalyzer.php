@@ -94,11 +94,143 @@ class FilamentRelationManagerDefinition
 
 class FilamentAnalyzer
 {
+    /**
+     * Where panels are declared in a default Laravel skeleton.
+     *
+     * @var string[]
+     */
+    public const DEFAULT_PANEL_PATHS = ['app/Providers/Filament'];
+
+    /**
+     * Where resources, pages, widgets and relation managers live in a default
+     * Laravel skeleton.
+     *
+     * @var string[]
+     */
+    public const DEFAULT_PATHS = ['app/Filament'];
+
     private PhpFileParser $parser;
 
-    public function __construct()
-    {
+    /** @var string[] */
+    private array $panelPaths;
+
+    /** @var string[] */
+    private array $paths;
+
+    /**
+     * class FQCN => parent FQCN, collected from the scanned Filament trees so a
+     * resource or relation manager that extends a project base class is still
+     * recognised.
+     *
+     * @var array<string, string>
+     */
+    private array $classParents = [];
+
+    /**
+     * @param  string[]  $panelPaths  directories holding panel definitions, relative to the
+     *                                project root; glob patterns are expanded
+     * @param  string[]  $paths  directories holding resources, pages, widgets and relation
+     *                           managers, relative to the project root; glob patterns are
+     *                           expanded
+     */
+    public function __construct(
+        array $panelPaths = self::DEFAULT_PANEL_PATHS,
+        array $paths = self::DEFAULT_PATHS,
+    ) {
         $this->parser = new PhpFileParser;
+        $this->panelPaths = $panelPaths;
+        $this->paths = $paths;
+    }
+
+    /**
+     * The fully-qualified name of the class an `extends` clause points at.
+     *
+     * The use map alone is not enough: a base class in the same namespace as its children needs
+     * no import, so nobody writes one, and the clause is a bare short name that matches nothing
+     * in a map keyed by FQCN. The parser's resolved name covers that — it is the namespace
+     * resolution PHP itself would do — and the use map stays as the fallback for a file the
+     * resolver could not annotate.
+     *
+     * Every site that reads an `extends` clause has to agree on this, or one of them hands a
+     * short name to a chain walk keyed by FQCN and the class silently stops being recognised.
+     *
+     * @param  array<string, string>  $useMap
+     */
+    public static function parentFqcn(Node\Name $extends, array $useMap): string
+    {
+        $written = $extends->toString();
+
+        return ltrim(PhpFileParser::resolvedName($extends) ?? ($useMap[$written] ?? $written), '\\');
+    }
+
+    /**
+     * Expand the configured relative paths into absolute directories that exist.
+     * An entry is used verbatim when it is a directory and treated as a glob
+     * pattern otherwise, so a pattern such as `app-modules/*` + `/src/Filament`
+     * works for a modular monolith that keeps no `app/` directory at all.
+     *
+     * @param  string[]  $relativePaths
+     * @return string[] absolute directories
+     */
+    private function resolveDirs(string $projectRoot, array $relativePaths): array
+    {
+        $dirs = [];
+
+        foreach ($relativePaths as $relativePath) {
+            $relativePath = trim((string) $relativePath);
+            if ($relativePath === '') {
+                continue;
+            }
+
+            $absolute = rtrim($projectRoot, '/').'/'.ltrim($relativePath, '/');
+            if (is_dir($absolute)) {
+                $dirs[] = $absolute;
+
+                continue;
+            }
+
+            foreach (glob($absolute, GLOB_ONLYDIR | GLOB_BRACE) ?: [] as $match) {
+                $dirs[] = $match;
+            }
+        }
+
+        return array_values(array_unique($dirs));
+    }
+
+    /**
+     * Every PHP file below the given absolute directories, each file yielded once
+     * even when the directories overlap.
+     *
+     * @param  string[]  $dirs  absolute directories
+     * @return iterable<\SplFileInfo>
+     */
+    private function phpFilesIn(array $dirs): iterable
+    {
+        $seen = [];
+
+        foreach ($dirs as $dir) {
+            if (! is_dir($dir)) {
+                continue;
+            }
+
+            $iterator = new \RecursiveIteratorIterator(
+                new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)
+            );
+
+            foreach ($iterator as $entry) {
+                if (! $entry->isFile() || $entry->getExtension() !== 'php') {
+                    continue;
+                }
+
+                $realPath = $entry->getRealPath() ?: $entry->getPathname();
+                if (isset($seen[$realPath])) {
+                    continue;
+                }
+                $seen[$realPath] = true;
+
+                yield $entry;
+            }
+        }
     }
 
     /**
@@ -126,11 +258,14 @@ class FilamentAnalyzer
             return $empty;
         }
 
+        $dirs = $this->resolveDirs($projectRoot, $this->paths);
+        $this->classParents = $this->collectClassParents($dirs);
+
         $panels = $this->scanPanels($projectRoot);
-        $resources = $this->scanResources($projectRoot, $panels);
-        $pages = $this->scanPages($projectRoot, $panels);
-        $widgets = $this->scanWidgets($projectRoot, $panels);
-        $relationManagers = $this->scanRelationManagers($projectRoot);
+        $resources = $this->scanResources($dirs, $panels);
+        $pages = $this->scanPages($dirs, $panels);
+        $widgets = $this->scanWidgets($dirs, $panels);
+        $relationManagers = $this->scanRelationManagers($dirs);
 
         return [
             'detected' => true,
@@ -142,35 +277,108 @@ class FilamentAnalyzer
         ];
     }
 
-    // ── Panel scanning ────────────────────────────────────────────────────────
-
-    /** @return FilamentPanelDefinition[] */
-    private function scanPanels(string $projectRoot): array
+    /**
+     * Map every class declared in the scanned trees to the class it extends, with the
+     * parent resolved through the declaring file's use map.
+     *
+     * @param  string[]  $dirs  absolute directories
+     * @return array<string, string>
+     */
+    private function collectClassParents(array $dirs): array
     {
-        $panelsDir = $projectRoot.'/app/Providers/Filament';
-        if (! is_dir($panelsDir)) {
-            return [];
-        }
+        $parents = [];
 
-        $panels = [];
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($panelsDir, \FilesystemIterator::SKIP_DOTS)
-        );
-
-        foreach ($iterator as $entry) {
-            if (! $entry->isFile() || $entry->getExtension() !== 'php') {
-                continue;
-            }
-            if (! str_ends_with($entry->getBasename(), 'PanelProvider.php')) {
-                continue;
-            }
-
+        foreach ($this->phpFilesIn($dirs) as $entry) {
             $parsed = $this->parser->parse($entry->getPathname());
             if (! $parsed || ! $parsed['ast']) {
                 continue;
             }
 
-            $def = $this->extractPanel($parsed['ast'], $parsed['useMap'], $entry->getPathname());
+            $traverser = new NodeTraverser;
+            $visitor = new class($parsed['useMap']) extends NodeVisitorAbstract
+            {
+                /** @var array<string, string> */
+                public array $found = [];
+
+                private string $namespace = '';
+
+                public function __construct(private array $useMap) {}
+
+                public function enterNode(Node $node): ?int
+                {
+                    if ($node instanceof Node\Stmt\Namespace_) {
+                        $this->namespace = $node->name ? $node->name->toString() : '';
+                    }
+
+                    if ($node instanceof Node\Stmt\Class_ && $node->name !== null && $node->extends instanceof Node\Name) {
+                        $fqcn = $this->namespace !== ''
+                            ? $this->namespace.'\\'.$node->name->toString()
+                            : $node->name->toString();
+                        // `self::` inside an anonymous class is the anonymous class, not this one.
+                        $this->found[$fqcn] = FilamentAnalyzer::parentFqcn($node->extends, $this->useMap);
+                    }
+
+                    return null;
+                }
+            };
+
+            $traverser->addVisitor($visitor);
+            $traverser->traverse($parsed['ast']);
+
+            $parents += $visitor->found;
+        }
+
+        return $parents;
+    }
+
+    /**
+     * Whether an `extends` chain reaches a Filament base class of the given short name.
+     * Only the chain recorded from the scanned files is walked — a base class living in
+     * vendor/ is never parsed, so the walk ends there and the short name decides, exactly
+     * as the direct parent check always did. The chain is what lets a project's own
+     * `AppResource extends Resource` sit between Filament and every real resource.
+     */
+    private function descendsFrom(string $parentFqcn, string $baseShortName, int $depth = 0): bool
+    {
+        if ($parentFqcn === '' || $depth > 20) {
+            return false;
+        }
+
+        $position = strrpos($parentFqcn, '\\');
+        $shortName = $position === false ? $parentFqcn : substr($parentFqcn, $position + 1);
+
+        if ($shortName === $baseShortName) {
+            return true;
+        }
+
+        return $this->descendsFrom($this->classParents[$parentFqcn] ?? '', $baseShortName, $depth + 1);
+    }
+
+    // ── Panel scanning ────────────────────────────────────────────────────────
+
+    /** @return FilamentPanelDefinition[] */
+    private function scanPanels(string $projectRoot): array
+    {
+        $panels = [];
+
+        foreach ($this->phpFilesIn($this->resolveDirs($projectRoot, $this->panelPaths)) as $entry) {
+            $parsed = $this->parser->parse($entry->getPathname());
+            if (! $parsed || ! $parsed['ast']) {
+                continue;
+            }
+
+            // A `*PanelProvider.php` is a panel by convention — that is the file Filament's own
+            // installer writes, and it configures the injected $panel rather than building one.
+            // Any other file counts only when it actually builds a `Panel::make()` chain, so
+            // pointing panel_paths at a whole source tree cannot turn every class into a panel.
+            $byConvention = str_ends_with($entry->getBasename(), 'PanelProvider.php');
+
+            $def = $this->extractPanel(
+                $parsed['ast'],
+                $parsed['useMap'],
+                $entry->getPathname(),
+                requiresPanelBuilder: ! $byConvention,
+            );
             if ($def !== null) {
                 $panels[] = $def;
             }
@@ -179,10 +387,14 @@ class FilamentAnalyzer
         return $panels;
     }
 
-    private function extractPanel(array $ast, array $useMap, string $file): ?FilamentPanelDefinition
-    {
+    private function extractPanel(
+        array $ast,
+        array $useMap,
+        string $file,
+        bool $requiresPanelBuilder = false,
+    ): ?FilamentPanelDefinition {
         $traverser = new NodeTraverser;
-        $visitor = new class($file, $useMap) extends NodeVisitorAbstract
+        $visitor = new class($file, $useMap, $requiresPanelBuilder) extends NodeVisitorAbstract
         {
             public ?FilamentPanelDefinition $result = null;
 
@@ -212,9 +424,12 @@ class FilamentAnalyzer
             /** @var string[] */
             private array $discoverWidgetsFor = [];
 
+            private bool $sawPanelBuilder = false;
+
             public function __construct(
                 private string $file,
                 private array $useMap,
+                private bool $requiresPanelBuilder,
             ) {}
 
             public function enterNode(Node $node): ?int
@@ -225,6 +440,17 @@ class FilamentAnalyzer
 
                 if ($node instanceof Node\Stmt\Class_) {
                     $this->className = $node->name ? $node->name->toString() : '';
+                }
+
+                // Detect `Panel::make()` — the shape a panel registered outside the
+                // *PanelProvider convention takes (a plugin class, a factory, a provider
+                // that builds its own panel).
+                if ($node instanceof Node\Expr\StaticCall
+                    && $node->name instanceof Node\Identifier
+                    && $node->name->toString() === 'make'
+                    && $node->class instanceof Node\Name
+                    && $this->resolvesToPanel($node->class->toString())) {
+                    $this->sawPanelBuilder = true;
                 }
 
                 // Detect ->id('admin') method chains
@@ -284,6 +510,9 @@ class FilamentAnalyzer
                 if ($this->className === '') {
                     return null;
                 }
+                if ($this->requiresPanelBuilder && ! $this->sawPanelBuilder) {
+                    return null;
+                }
                 $fqcn = $this->namespace !== ''
                     ? $this->namespace.'\\'.$this->className
                     : $this->className;
@@ -302,6 +531,17 @@ class FilamentAnalyzer
                 );
 
                 return null;
+            }
+
+            /**
+             * Whether a class name written in the source refers to Filament's Panel,
+             * resolved through the file's use map so an aliased import still matches.
+             */
+            private function resolvesToPanel(string $name): bool
+            {
+                $resolved = $this->useMap[$name] ?? $name;
+
+                return ltrim($resolved, '\\') === 'Filament\\Panel';
             }
 
             /**
@@ -362,13 +602,8 @@ class FilamentAnalyzer
      * @param  FilamentPanelDefinition[]  $panels
      * @return FilamentResourceDefinition[]
      */
-    private function scanResources(string $projectRoot, array &$panels): array
+    private function scanResources(array $dirs, array &$panels): array
     {
-        $filamentDir = $projectRoot.'/app/Filament';
-        if (! is_dir($filamentDir)) {
-            return [];
-        }
-
         // Build reverse map: explicit resource FQCN => panelId
         $resourceToPanelId = [];
         foreach ($panels as $panel) {
@@ -379,18 +614,12 @@ class FilamentAnalyzer
 
         $resources = [];
 
-        // Scan all PHP files under app/Filament/ recursively.
+        // Scan all PHP files under the configured Filament directories recursively.
         // Only process files inside a Resources/ directory; skip files that live in
         // known non-resource sub-directories (Pages, RelationManagers, Schemas, Tables, Widgets).
         // This supports both flat layouts (Resources/PostResource.php) and grouped layouts
         // (Resources/Shop/Products/ProductResource.php).
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($filamentDir, \FilesystemIterator::SKIP_DOTS)
-        );
-        foreach ($iterator as $entry) {
-            if (! $entry->isFile() || $entry->getExtension() !== 'php') {
-                continue;
-            }
+        foreach ($this->phpFilesIn($dirs) as $entry) {
             $normalizedPath = str_replace('\\', '/', $entry->getPathname());
             if (! str_contains($normalizedPath, '/Resources/')) {
                 continue;
@@ -513,7 +742,7 @@ class FilamentAnalyzer
 
             private string $slug = '';
 
-            private bool $isResource = false;
+            public string $parentFqcn = '';
 
             /** @var array<string, string> */
             private array $pages = [];
@@ -534,10 +763,8 @@ class FilamentAnalyzer
 
                 if ($node instanceof Node\Stmt\Class_) {
                     $this->className = $node->name ? $node->name->toString() : '';
-                    // Check if extends Resource
                     if ($node->extends instanceof Node\Name) {
-                        $parent = $node->extends->getLast();
-                        $this->isResource = $parent === 'Resource';
+                        $this->parentFqcn = FilamentAnalyzer::parentFqcn($node->extends, $this->useMap);
                     }
                 }
 
@@ -585,7 +812,7 @@ class FilamentAnalyzer
 
             public function afterTraverse(array $nodes): ?array
             {
-                if ($this->className === '' || ! $this->isResource) {
+                if ($this->className === '') {
                     return null;
                 }
                 $fqcn = $this->namespace !== ''
@@ -683,6 +910,10 @@ class FilamentAnalyzer
         $traverser->addVisitor($visitor);
         $traverser->traverse($ast);
 
+        if (! $this->descendsFrom($visitor->parentFqcn, 'Resource')) {
+            return null;
+        }
+
         return $visitor->result;
     }
 
@@ -692,32 +923,23 @@ class FilamentAnalyzer
      * @param  FilamentPanelDefinition[]  $panels
      * @return FilamentPageDefinition[]
      */
-    private function scanPages(string $projectRoot, array &$panels): array
+    private function scanPages(array $dirs, array &$panels): array
     {
         $pages = [];
 
-        // Scan the entire app/Filament/ tree once and categorise pages by path.
+        // Scan the configured Filament directories once and categorise pages by path.
         // - Resource pages: live inside a Resources/ directory AND inside a Pages/ sub-directory.
         // - Custom pages:   live inside a Pages/ directory but NOT inside a Resources/ directory.
         //   This covers both the standard app/Filament/Pages/ location and non-standard
         //   panel layouts such as app/Filament/App/Pages/ (common in Filament v3+ multi-panel apps).
-        $filamentDir = $projectRoot.'/app/Filament';
-        if (is_dir($filamentDir)) {
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($filamentDir, \FilesystemIterator::SKIP_DOTS)
-            );
-            foreach ($iterator as $entry) {
-                if (! $entry->isFile() || $entry->getExtension() !== 'php') {
-                    continue;
-                }
-                $normalizedPath = str_replace('\\', '/', $entry->getPathname());
-                if (! str_contains($normalizedPath, '/Pages/')) {
-                    continue;
-                }
-                $def = $this->extractPage($entry->getPathname());
-                if ($def !== null) {
-                    $pages[] = $def;
-                }
+        foreach ($this->phpFilesIn($dirs) as $entry) {
+            $normalizedPath = str_replace('\\', '/', $entry->getPathname());
+            if (! str_contains($normalizedPath, '/Pages/')) {
+                continue;
+            }
+            $def = $this->extractPage($entry->getPathname());
+            if ($def !== null) {
+                $pages[] = $def;
             }
         }
 
@@ -901,61 +1123,20 @@ class FilamentAnalyzer
      * @param  FilamentPanelDefinition[]  $panels
      * @return FilamentWidgetDefinition[]
      */
-    private function scanWidgets(string $projectRoot, array &$panels): array
+    private function scanWidgets(array $dirs, array &$panels): array
     {
         $widgets = [];
-        $seenFiles = [];
 
-        // Helper closure to scan a directory recursively for widget PHP files.
-        $scanDir = function (string $dir) use (&$widgets, &$seenFiles): void {
-            if (! is_dir($dir)) {
-                return;
+        // Every file below a Widgets/ directory anywhere in the configured Filament trees:
+        // the panel-level app/Filament/Widgets/ as well as widgets co-located with a resource
+        // (app/Filament/Resources/**/Widgets/, the Filament v3+ grouped-resource pattern).
+        foreach ($this->phpFilesIn($dirs) as $entry) {
+            if (! str_contains(str_replace('\\', '/', $entry->getPathname()), '/Widgets/')) {
+                continue;
             }
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($dir, \FilesystemIterator::SKIP_DOTS)
-            );
-            foreach ($iterator as $entry) {
-                if (! $entry->isFile() || $entry->getExtension() !== 'php') {
-                    continue;
-                }
-                $realPath = $entry->getRealPath();
-                if (isset($seenFiles[$realPath])) {
-                    continue;
-                }
-                $seenFiles[$realPath] = true;
-                $def = $this->extractWidget($entry->getPathname());
-                if ($def !== null) {
-                    $widgets[] = $def;
-                }
-            }
-        };
-
-        // Standard panel-level widgets: app/Filament/Widgets/
-        $scanDir($projectRoot.'/app/Filament/Widgets');
-
-        // Widgets co-located with resources (Filament v3+ grouped-resource pattern):
-        // app/Filament/Resources/**/Widgets/
-        $resourcesDir = $projectRoot.'/app/Filament/Resources';
-        if (is_dir($resourcesDir)) {
-            $iterator = new \RecursiveIteratorIterator(
-                new \RecursiveDirectoryIterator($resourcesDir, \FilesystemIterator::SKIP_DOTS)
-            );
-            foreach ($iterator as $entry) {
-                if (! $entry->isFile() || $entry->getExtension() !== 'php') {
-                    continue;
-                }
-                if (! str_contains(str_replace('\\', '/', $entry->getPathname()), '/Widgets/')) {
-                    continue;
-                }
-                $realPath = $entry->getRealPath();
-                if (isset($seenFiles[$realPath])) {
-                    continue;
-                }
-                $seenFiles[$realPath] = true;
-                $def = $this->extractWidget($entry->getPathname());
-                if ($def !== null) {
-                    $widgets[] = $def;
-                }
+            $def = $this->extractWidget($entry->getPathname());
+            if ($def !== null) {
+                $widgets[] = $def;
             }
         }
 
@@ -1066,22 +1247,11 @@ class FilamentAnalyzer
     // ── Relation Manager scanning ─────────────────────────────────────────────
 
     /** @return FilamentRelationManagerDefinition[] */
-    private function scanRelationManagers(string $projectRoot): array
+    private function scanRelationManagers(array $dirs): array
     {
-        $filamentDir = $projectRoot.'/app/Filament';
-        if (! is_dir($filamentDir)) {
-            return [];
-        }
-
         $managers = [];
-        $iterator = new \RecursiveIteratorIterator(
-            new \RecursiveDirectoryIterator($filamentDir, \FilesystemIterator::SKIP_DOTS)
-        );
 
-        foreach ($iterator as $entry) {
-            if (! $entry->isFile() || $entry->getExtension() !== 'php') {
-                continue;
-            }
+        foreach ($this->phpFilesIn($dirs) as $entry) {
             if (! str_contains(str_replace('\\', '/', $entry->getPathname()), '/RelationManagers/')) {
                 continue;
             }
@@ -1103,7 +1273,7 @@ class FilamentAnalyzer
         }
 
         $traverser = new NodeTraverser;
-        $visitor = new class($file) extends NodeVisitorAbstract
+        $visitor = new class($file, $parsed['useMap']) extends NodeVisitorAbstract
         {
             public ?FilamentRelationManagerDefinition $result = null;
 
@@ -1111,11 +1281,11 @@ class FilamentAnalyzer
 
             private string $className = '';
 
-            private string $parentClass = '';
+            public string $parentFqcn = '';
 
             private string $relationship = '';
 
-            public function __construct(private string $file) {}
+            public function __construct(private string $file, private array $useMap) {}
 
             public function enterNode(Node $node): ?int
             {
@@ -1126,7 +1296,7 @@ class FilamentAnalyzer
                 if ($node instanceof Node\Stmt\Class_) {
                     $this->className = $node->name ? $node->name->toString() : '';
                     if ($node->extends instanceof Node\Name) {
-                        $this->parentClass = $node->extends->getLast();
+                        $this->parentFqcn = FilamentAnalyzer::parentFqcn($node->extends, $this->useMap);
                     }
                 }
 
@@ -1147,7 +1317,7 @@ class FilamentAnalyzer
 
             public function afterTraverse(array $nodes): ?array
             {
-                if ($this->className === '' || $this->parentClass !== 'RelationManager') {
+                if ($this->className === '') {
                     return null;
                 }
 
@@ -1176,6 +1346,10 @@ class FilamentAnalyzer
 
         $traverser->addVisitor($visitor);
         $traverser->traverse($parsed['ast']);
+
+        if (! $this->descendsFrom($visitor->parentFqcn, 'RelationManager')) {
+            return null;
+        }
 
         return $visitor->result;
     }

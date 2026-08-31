@@ -301,6 +301,39 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Filament Search Paths
+    // -------------------------------------------------------------------------
+    // Directories (relative to the project root) scanned for Filament panels and
+    // for the resources, pages, widgets and relation managers they expose.
+    //
+    // An entry is used as-is when it is a directory and expanded as a glob pattern
+    // otherwise, so a modular monolith that keeps no app/ directory can point these
+    // at its packages:
+    //
+    //   'panel_paths' => ['app-modules/*/src/Filament'],
+    //   'paths'       => ['app-modules/*/src/Filament'],
+    //
+    // panel_paths  Where panels are declared. A file named *PanelProvider.php is
+    //              treated as a panel by convention (that is what Filament's own
+    //              installer writes); any other file counts only when it actually
+    //              builds a Panel::make() chain, so pointing this at a whole source
+    //              tree does not turn every class into a panel.
+    //
+    // paths        Roots of the Filament class tree. Resources are recognised by a
+    //              Resources/ path segment, pages by Pages/, widgets by Widgets/ and
+    //              relation managers by RelationManagers/ — the layout Filament's
+    //              generators produce.
+    //
+    'filament' => [
+        'panel_paths' => [
+            'app/Providers/Filament',
+        ],
+        'paths' => [
+            'app/Filament',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Livewire Component Search Paths
     // -------------------------------------------------------------------------
     // Directories (relative to project root) that are searched when resolving

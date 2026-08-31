@@ -112,7 +112,12 @@ class ProjectAnalyzer
         $this->methodTracer = new MethodTracer(is_array($dispatchHelpers) ? $dispatchHelpers : []);
         $modelPaths = config('laravel-brain.models.paths', ['app/Models']);
         $this->modelAnalyzer = new ModelAnalyzer(is_array($modelPaths) ? $modelPaths : []);
-        $this->filamentAnalyzer = new FilamentAnalyzer;
+        $filamentPanelPaths = config('laravel-brain.filament.panel_paths', FilamentAnalyzer::DEFAULT_PANEL_PATHS);
+        $filamentPaths = config('laravel-brain.filament.paths', FilamentAnalyzer::DEFAULT_PATHS);
+        $this->filamentAnalyzer = new FilamentAnalyzer(
+            is_array($filamentPanelPaths) ? $filamentPanelPaths : FilamentAnalyzer::DEFAULT_PANEL_PATHS,
+            is_array($filamentPaths) ? $filamentPaths : FilamentAnalyzer::DEFAULT_PATHS,
+        );
         $this->queryTracer = new QueryTracer;
         $this->securityAnalyzer = new SecurityAnalyzer(
             extraAuthPatterns: $this->stringList(config('laravel-brain.security.auth_middleware', [])),

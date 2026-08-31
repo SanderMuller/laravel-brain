@@ -265,6 +265,20 @@ This produces the full edge list used to build the graph.
 
 When Filament is installed, the scanner discovers every panel registered via service providers, then resolves its resources, pages, widgets, and relation managers — both explicitly listed (`->resources([...])`) and auto-discovered (`->discoverResources(for: '...')`). Filament page methods are traced through the same call-chain engine as controller actions, so models and services they touch appear in the graph.
 
+Resources and relation managers are recognised through their whole `extends` chain, so a project base class (`class OrderResource extends AppResource`, `AppResource extends Resource`) does not hide them.
+
+Applications that keep their Filament classes somewhere other than `app/Filament` - a modular monolith with no `app/` directory, for instance — point the scanner at their own layout. An entry is used as-is when it is a directory and expanded as a glob pattern otherwise:
+
+```php
+// config/laravel-brain.php
+'filament' => [
+    'panel_paths' => ['app-modules/*/src/Filament'],
+    'paths' => ['app-modules/*/src/Filament'],
+],
+```
+
+A file named `*PanelProvider.php` is treated as a panel by convention. Any other file counts as a panel only when it actually builds a `Panel::make()` chain, so pointing `panel_paths` at a whole source tree does not turn every class into a panel.
+
 ## Graph Node Types
 
 | Node | Accent Color | Represents |
