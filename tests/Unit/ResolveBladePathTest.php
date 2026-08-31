@@ -188,9 +188,35 @@ it('does not accept a root whose name merely starts the hint', function () {
     $tmp = blade_writeTwoPackages();
 
     try {
-        // `alpha` must not answer for `alpha-pro`: a substring match here is the same
-        // "close enough" step that produces a wrong edge.
+        // `alpha` must not answer for `alpha-pro`.
         expect(resolveBlade($tmp, ['packages/*/resources/views'], 'alpha-pro::orders.index'))->toBeNull();
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+/** Two roots a substring test cannot tell apart: `alpha` is contained in both names. */
+function blade_writeSimilarlyNamedPackages(): string
+{
+    $tmp = sys_get_temp_dir().'/lb_blade_'.bin2hex(random_bytes(6));
+
+    foreach (['alpha', 'alpha-pro'] as $package) {
+        mkdir($tmp.'/packages/'.$package.'/resources/views/orders', 0o777, true);
+        file_put_contents($tmp.'/packages/'.$package.'/resources/views/orders/index.blade.php', '<div></div>');
+    }
+
+    return $tmp;
+}
+
+it('matches a hint against whole path segments, not a substring of the root', function () {
+    $tmp = blade_writeSimilarlyNamedPackages();
+
+    try {
+        // The discriminating direction: a substring test says `alpha` names BOTH roots, so
+        // it cannot pick one and the view goes unresolved. Whole-segment matching names
+        // exactly the root called `alpha`, and the hint does its job.
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'alpha::orders.index'))
+            ->toBe($tmp.'/packages/alpha/resources/views/orders/index.blade.php');
     } finally {
         deleteTree($tmp);
     }
