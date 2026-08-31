@@ -143,6 +143,27 @@ class FilamentAnalyzer
     }
 
     /**
+     * The fully-qualified name of the class an `extends` clause points at.
+     *
+     * The use map alone is not enough: a base class in the same namespace as its children needs
+     * no import, so nobody writes one, and the clause is a bare short name that matches nothing
+     * in a map keyed by FQCN. The parser's resolved name covers that — it is the namespace
+     * resolution PHP itself would do — and the use map stays as the fallback for a file the
+     * resolver could not annotate.
+     *
+     * Every site that reads an `extends` clause has to agree on this, or one of them hands a
+     * short name to a chain walk keyed by FQCN and the class silently stops being recognised.
+     *
+     * @param  array<string, string>  $useMap
+     */
+    public static function parentFqcn(Node\Name $extends, array $useMap): string
+    {
+        $written = $extends->toString();
+
+        return ltrim(PhpFileParser::resolvedName($extends) ?? ($useMap[$written] ?? $written), '\\');
+    }
+
+    /**
      * Expand the configured relative paths into absolute directories that exist.
      * An entry is used verbatim when it is a directory and treated as a glob
      * pattern otherwise, so a pattern such as `app-modules/*` + `/src/Filament`
@@ -293,8 +314,8 @@ class FilamentAnalyzer
                         $fqcn = $this->namespace !== ''
                             ? $this->namespace.'\\'.$node->name->toString()
                             : $node->name->toString();
-                        $parent = $node->extends->toString();
-                        $this->found[$fqcn] = ltrim($this->useMap[$parent] ?? $parent, '\\');
+                        // `self::` inside an anonymous class is the anonymous class, not this one.
+                        $this->found[$fqcn] = FilamentAnalyzer::parentFqcn($node->extends, $this->useMap);
                     }
 
                     return null;
@@ -743,8 +764,7 @@ class FilamentAnalyzer
                 if ($node instanceof Node\Stmt\Class_) {
                     $this->className = $node->name ? $node->name->toString() : '';
                     if ($node->extends instanceof Node\Name) {
-                        $parent = $node->extends->toString();
-                        $this->parentFqcn = ltrim($this->useMap[$parent] ?? $parent, '\\');
+                        $this->parentFqcn = FilamentAnalyzer::parentFqcn($node->extends, $this->useMap);
                     }
                 }
 
@@ -1276,8 +1296,7 @@ class FilamentAnalyzer
                 if ($node instanceof Node\Stmt\Class_) {
                     $this->className = $node->name ? $node->name->toString() : '';
                     if ($node->extends instanceof Node\Name) {
-                        $parent = $node->extends->toString();
-                        $this->parentFqcn = ltrim($this->useMap[$parent] ?? $parent, '\\');
+                        $this->parentFqcn = FilamentAnalyzer::parentFqcn($node->extends, $this->useMap);
                     }
                 }
 

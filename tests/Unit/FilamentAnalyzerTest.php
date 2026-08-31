@@ -288,3 +288,36 @@ function modularAnalyzer(): FilamentAnalyzer
         paths: ['app-modules/*/src/Filament'],
     );
 }
+
+// ── A base class in the same namespace needs no import ───────────────────────
+
+function sameNamespaceAnalyzer(): FilamentAnalyzer
+{
+    return new FilamentAnalyzer(
+        panelPaths: ['app-modules/*/src/Filament'],
+        paths: ['app-modules/*/src/Filament'],
+    );
+}
+
+it('recognises a resource whose base class sits in its own namespace', function () {
+    // PHP needs no `use` for a class in the same namespace, so nobody writes one and the
+    // parent is a bare short name. Resolving it through the use map alone finds nothing.
+    $result = sameNamespaceAnalyzer()->analyze(fixture('filament-same-namespace-project'));
+
+    $fqcns = array_map(fn (FilamentResourceDefinition $r): string => $r->fqcn, $result['resources']);
+
+    expect($fqcns)->toContain('Modules\\Catalog\\Filament\\Resources\\ProductResource');
+});
+
+it('recognises a relation manager whose base class sits in its own namespace', function () {
+    $result = sameNamespaceAnalyzer()->analyze(fixture('filament-same-namespace-project'));
+
+    $fqcns = array_map(
+        fn (FilamentRelationManagerDefinition $m): string => $m->fqcn,
+        $result['relationManagers'],
+    );
+
+    expect($fqcns)->toContain(
+        'Modules\\Catalog\\Filament\\Resources\\ProductResource\\RelationManagers\\PricesRelationManager',
+    );
+});
