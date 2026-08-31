@@ -142,8 +142,11 @@ export function layoutBreadthFirst(
   nodes: LayoutNode[],
   edges: LayoutEdge[],
   rankDir: 'LR' | 'TB',
-  spacingX = 88,
-  spacingY = 88,
+  // Gaps BETWEEN card edges, not the distance between their centres: a card is 185–270 wide
+  // and 90 tall, so a constant centre pitch cannot know whether it clears one. Matches the
+  // nodesep/ranksep given to dagre, so the two layouts read alike.
+  gapWithinLayer = 60,
+  gapBetweenLayers = 110,
 ): void {
   const ids = new Set(nodes.map((n) => n.id))
   const adj = new Map<string, string[]>()
@@ -187,18 +190,34 @@ export function layoutBreadthFirst(
   }
   for (const arr of layers.values()) arr.sort()
   const byId = new Map(nodes.map((n) => [n.id, n]))
-  for (const [, idsInLayer] of layers) {
-    const l = level.get(idsInLayer[0])!
-    idsInLayer.forEach((id, i) => {
-      const node = byId.get(id)!
-      if (rankDir === 'TB') {
-        node.x = i * spacingX - ((idsInLayer.length - 1) * spacingX) / 2
-        node.y = l * spacingY
-      } else {
-        node.x = l * spacingX
-        node.y = i * spacingY - ((idsInLayer.length - 1) * spacingY) / 2
+  // Pack each layer from the cards' own measurements. `x`/`y` are centres, as dagre reports
+  // them, so a card contributes half its size on each side.
+  let cursor = 0
+  for (const l of [...layers.keys()].sort((a, b) => a - b)) {
+    const layerNodes = layers.get(l)!.map((id) => byId.get(id)!)
+    if (rankDir === 'TB') {
+      const rowWidth =
+        layerNodes.reduce((sum, n) => sum + n.width, 0) + gapWithinLayer * (layerNodes.length - 1)
+      const rowHeight = Math.max(...layerNodes.map((n) => n.height))
+      let x = -rowWidth / 2
+      for (const node of layerNodes) {
+        node.x = x + node.width / 2
+        node.y = cursor + rowHeight / 2
+        x += node.width + gapWithinLayer
       }
-    })
+      cursor += rowHeight + gapBetweenLayers
+    } else {
+      const columnHeight =
+        layerNodes.reduce((sum, n) => sum + n.height, 0) + gapWithinLayer * (layerNodes.length - 1)
+      const columnWidth = Math.max(...layerNodes.map((n) => n.width))
+      let y = -columnHeight / 2
+      for (const node of layerNodes) {
+        node.x = cursor + columnWidth / 2
+        node.y = y + node.height / 2
+        y += node.height + gapWithinLayer
+      }
+      cursor += columnWidth + gapBetweenLayers
+    }
   }
 }
 
@@ -246,13 +265,15 @@ export function layoutCircle(nodes: LayoutNode[], radius: number): void {
   })
 }
 
-export function layoutGrid(nodes: LayoutNode[], cellW = 200, cellH = 120): void {
-  const cols = Math.ceil(Math.sqrt(Math.max(1, nodes.length)))
+export function layoutGrid(nodes: LayoutNode[], gapX = 60, gapY = 60): void {
+  if (!nodes.length) return
+  // Same reasoning as the layered layout: a fixed 200-wide cell clipped the 270-wide cards.
+  const cellW = Math.max(...nodes.map((n) => n.width)) + gapX
+  const cellH = Math.max(...nodes.map((n) => n.height)) + gapY
+  const cols = Math.ceil(Math.sqrt(nodes.length))
   nodes.forEach((node, i) => {
-    const row = Math.floor(i / cols)
-    const col = i % cols
-    node.x = col * cellW
-    node.y = row * cellH
+    node.x = (i % cols) * cellW
+    node.y = Math.floor(i / cols) * cellH
   })
 }
 
