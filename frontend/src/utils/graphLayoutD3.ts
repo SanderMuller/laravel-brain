@@ -169,18 +169,35 @@ export function layoutBreadthFirst(
   // node is re-queued forever — and an inverse pair of Eloquent relations (hasMany plus its
   // belongsTo) is a cycle, which is to say most model graphs contain one.
   let head = 0
-  while (head < q.length) {
-    const u = q[head++]
-    const lv = level.get(u)!
-    for (const v of adj.get(u) ?? []) {
-      if (!level.has(v)) {
-        level.set(v, lv + 1)
-        q.push(v)
+  const drain = (): void => {
+    while (head < q.length) {
+      const u = q[head++]
+      const lv = level.get(u)!
+      for (const v of adj.get(u) ?? []) {
+        if (!level.has(v)) {
+          level.set(v, lv + 1)
+          q.push(v)
+        }
       }
     }
   }
-  for (const n of nodes) {
-    if (!level.has(n.id)) level.set(n.id, 0)
+  drain()
+
+  // Not every node is reachable from a node with nothing pointing at it. Two models joined
+  // only by an inverse relation are a component with no entry, and there is nothing to walk
+  // in from. Levelling those at 0 collapses them into one undifferentiated row beside the
+  // real roots; seeding the least depended-on of them instead gives each component its own
+  // hierarchy. `indeg` is only a heuristic for "most root-like", which is all it needs to be.
+  for (;;) {
+    let seed: LayoutNode | null = null
+    for (const n of nodes) {
+      if (level.has(n.id)) continue
+      if (seed === null || indeg.get(n.id)! < indeg.get(seed.id)!) seed = n
+    }
+    if (seed === null) break
+    level.set(seed.id, 0)
+    q.push(seed.id)
+    drain()
   }
   const layers = new Map<number, string[]>()
   for (const n of nodes) {
