@@ -65,6 +65,18 @@ final class DatabaseGraphStore implements GraphStore
         $this->put($tabId, $json);
     }
 
+    public function pruneSubgraphsExcept(array $keep): void
+    {
+        if (! $this->ready()) {
+            return;
+        }
+
+        $this->query()
+            ->where('tab', '!=', self::MANIFEST_KEY)
+            ->whereNotIn('tab', $keep)
+            ->delete();
+    }
+
     public function subgraphIds(): array
     {
         if (! $this->ready()) {

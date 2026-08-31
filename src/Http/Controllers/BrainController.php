@@ -57,6 +57,8 @@ class BrainController extends Controller
             $store->putSubgraph((string) $tabId, $subgraph->toJson());
         }
 
+        $store->pruneSubgraphsExcept(array_map('strval', array_keys($result->subgraphs)));
+
         return response()->json([
             'success' => true,
             'message' => 'Project scan completed successfully.',
