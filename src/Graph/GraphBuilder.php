@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LaraMint\LaravelBrain\Graph;
 
 use Illuminate\Support\Str;
+use LaraMint\LaravelBrain\Analysis\BladeViewAnalyzer;
 use LaraMint\LaravelBrain\Analysis\CallChainEdge;
 use LaraMint\LaravelBrain\Analysis\ChannelDefinition;
 use LaraMint\LaravelBrain\Analysis\ConsoleCommandDefinition;
@@ -26,6 +27,7 @@ use LaraMint\LaravelBrain\Analysis\PhpStructureInspector;
 use LaraMint\LaravelBrain\Analysis\ProjectFileIndex;
 use LaraMint\LaravelBrain\Analysis\RouteDefinition;
 use LaraMint\LaravelBrain\Analysis\ScheduleEntry;
+use LaraMint\LaravelBrain\Analysis\SourceDirectories;
 use LaraMint\LaravelBrain\Analysis\ValidationRulesExtractor;
 use LaraMint\LaravelBrain\Parser\PhpExtendsFqcnResolver;
 use LaraMint\LaravelBrain\Parser\PhpFileParser;
@@ -94,6 +96,12 @@ class GraphBuilder
     /** @var array<string, 'enum'|'interface'|'trait'|'abstract_class'|null> */
     private array $surfaceKindCache = [];
 
+    /** @var string[] view roots, relative to the project root */
+    private array $viewPaths = BladeViewAnalyzer::DEFAULT_PATHS;
+
+    /** @var string[] class-file search roots, relative to the project root */
+    private array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS;
+
     private ?ContainerBindingRegistry $bindingRegistry = null;
 
     private ?FacadeRegistry $facadeRegistry = null;
@@ -127,6 +135,32 @@ class GraphBuilder
     {
         if ($paths !== []) {
             $this->livewireComponentPaths = $paths;
+        }
+    }
+
+    /**
+     * The view roots a view name is resolved against. Must match what
+     * {@see BladeViewAnalyzer} was given, or the two
+     * disagree about which templates exist.
+     *
+     * @param  string[]  $paths  relative to the project root; glob patterns are expanded
+     */
+    public function setViewPaths(array $paths): void
+    {
+        if ($paths !== []) {
+            $this->viewPaths = $paths;
+        }
+    }
+
+    /**
+     * The directories searched by file name when the PSR-4 map cannot place a class.
+     *
+     * @param  string[]  $paths  relative to the project root; glob patterns are expanded
+     */
+    public function setSourcePaths(array $paths): void
+    {
+        if ($paths !== []) {
+            $this->sourcePaths = $paths;
         }
     }
 
@@ -187,7 +221,7 @@ class GraphBuilder
 
         if ($this->projectRoot !== '') {
             $relative = str_replace('\\', '/', $fqcn).'.php';
-            foreach (['app/Http/Controllers/', 'app/', 'src/'] as $prefix) {
+            foreach (SourceDirectories::classFilePrefixes($this->projectRoot, $this->sourcePaths) as $prefix) {
                 $path = $this->projectRoot.'/'.$prefix.$relative;
                 if (file_exists($path)) {
                     return $path;
@@ -214,7 +248,11 @@ class GraphBuilder
 
         $filename = $shortName.'.php';
 
-        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename) ?? '';
+        return ProjectFileIndex::findFile(
+            $this->projectRoot,
+            SourceDirectories::resolve($this->projectRoot, $this->sourcePaths),
+            $filename,
+        ) ?? '';
     }
 
     /**
@@ -1457,6 +1495,7 @@ class GraphBuilder
         }
 
         $bladeRel = static fn (string $dotted): string => str_replace('.', '/', $dotted).'.blade.php';
+        $viewRoots = SourceDirectories::resolve($root, $this->viewPaths);
 
         if (str_contains($viewDot, '::')) {
             [$hint, $path] = explode('::', $viewDot, 2);
@@ -1484,7 +1523,10 @@ class GraphBuilder
                 }
             }
 
-            return null;
+            // A namespace hint is bound to its directory at runtime, by whichever provider
+            // registered it, so it cannot be mapped to a path in general. What is left is
+            // the file name, and a hint that names one of the roots.
+            return $this->uniqueExistingView($root, $viewRoots, $rel, $hint);
         }
 
         $rel = $bladeRel($viewDot);
@@ -1498,7 +1540,66 @@ class GraphBuilder
             }
         }
 
-        return null;
+        return $this->uniqueExistingView($root, $viewRoots, $rel);
+    }
+
+    /**
+     * The one view root that holds a template, or null when more than one does.
+     *
+     * Two roots with the same relative template have no single right answer, and picking by
+     * array order produces a confidently wrong edge — worse to read, in a graph answering
+     * "what renders this?", than an edge that is simply absent. A hint settles it only when
+     * it names exactly one of the roots.
+     *
+     * @param  string[]  $viewRoots  relative to the project root
+     */
+    private function uniqueExistingView(string $root, array $viewRoots, string $rel, ?string $hint = null): ?string
+    {
+        $matches = [];
+
+        foreach ($viewRoots as $viewRoot) {
+            $candidate = $root.'/'.trim($viewRoot, '/').'/'.$rel;
+            if (is_file($candidate)) {
+                $matches[$viewRoot] = $candidate;
+            }
+        }
+
+        if ($matches === []) {
+            return null;
+        }
+
+        if ($hint !== null) {
+            $named = array_filter(
+                $matches,
+                fn (string $viewRoot): bool => $this->viewRootCarriesHint($viewRoot, $hint),
+                ARRAY_FILTER_USE_KEY,
+            );
+
+            if (count($named) === 1) {
+                return reset($named);
+            }
+        }
+
+        return count($matches) === 1 ? reset($matches) : null;
+    }
+
+    /**
+     * Whether a view root is named after a namespace hint.
+     *
+     * Whole path segments only: a substring test accepts `packages/billing` for a hint of
+     * `billing-pro`. A namespace is conventionally `<vendor>-<package>` while the directory
+     * carries the package alone, so that one spelling is tried too.
+     */
+    private function viewRootCarriesHint(string $viewRoot, string $hint): bool
+    {
+        $hint = Str::kebab($hint);
+        $names = [$hint];
+
+        if (str_contains($hint, '-')) {
+            $names[] = substr($hint, strpos($hint, '-') + 1);
+        }
+
+        return array_intersect($names, explode('/', trim($viewRoot, '/'))) !== [];
     }
 
     /**

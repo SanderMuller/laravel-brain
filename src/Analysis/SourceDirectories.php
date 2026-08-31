@@ -18,12 +18,48 @@ namespace LaraMint\LaravelBrain\Analysis;
 final class SourceDirectories
 {
     /**
+     * Where application classes live in a default Laravel skeleton. `src/` is here too
+     * because a package checked out as the project itself keeps its classes there.
+     *
+     * @var string[]
+     */
+    public const DEFAULT_SOURCE_PATHS = ['app', 'src'];
+
+    /**
+     * Resolved directories, keyed by project root and patterns.
+     *
+     * Resolution sits inside per-class lookups — {@see MethodTracer},
+     * GraphBuilder, ControllerAnalyzer and QueryTracer all call it once per FQCN they cannot
+     * place. With literal directories that is two is_dir() calls and free; with a glob it is a
+     * directory scan, measured at 0.19 ms against a 90-package tree, which thousands of lookups
+     * turn into seconds of re-globbing a tree that has not changed.
+     *
+     * Process-static, so it must be cleared when the filesystem may have moved under it —
+     * {@see clear()}, called alongside ProjectFileIndex::clear() at the start of every analyze()
+     * and before each watch poll.
+     *
+     * @var array<string, string[]>
+     */
+    private static array $resolved = [];
+
+    public static function clear(): void
+    {
+        self::$resolved = [];
+    }
+
+    /**
      * @param  string[]  $patterns  paths or glob patterns, relative to the project root
      * @return string[] existing directories, relative to the project root
      */
     public static function resolve(string $projectRoot, array $patterns): array
     {
         $root = rtrim($projectRoot, '/');
+        $memoKey = $root."\0".implode("\0", $patterns);
+
+        if (isset(self::$resolved[$memoKey])) {
+            return self::$resolved[$memoKey];
+        }
+
         $directories = [];
 
         foreach ($patterns as $pattern) {
@@ -45,12 +81,63 @@ final class SourceDirectories
             }
         }
 
-        return array_values(array_unique($directories));
+        return self::$resolved[$memoKey] = array_values(array_unique($directories));
+    }
+
+    /**
+     * Prefixes for the relative-path lookup that precedes the by-file-name search: a
+     * class whose namespace mirrors a directory layout is found by joining the two.
+     *
+     * `app/Http/Controllers/` is kept while `app` is a source path, since that is where
+     * Laravel's own controllers sit and the prefix predates this being configurable.
+     *
+     * @param  string[]  $sourcePaths
+     * @return string[] each with a trailing slash
+     */
+    public static function classFilePrefixes(string $projectRoot, array $sourcePaths): array
+    {
+        $prefixes = [];
+
+        foreach (self::resolve($projectRoot, $sourcePaths) as $directory) {
+            if ($directory === 'app') {
+                $prefixes[] = 'app/Http/Controllers/';
+            }
+            $prefixes[] = trim($directory, '/').'/';
+        }
+
+        return array_values(array_unique($prefixes));
+    }
+
+    /**
+     * Whether an absolute path sits inside one of the given directories.
+     *
+     * Anchored at the project root rather than a substring test: `str_contains($p, '/app/')`
+     * calls every file "in app/" when the project itself lives under a directory of that
+     * name, and would let a change outside the source tree take a scoped rebuild.
+     *
+     * @param  string[]  $directories  relative to the project root
+     */
+    public static function contains(string $projectRoot, array $directories, string $path): bool
+    {
+        $root = rtrim($projectRoot, '/');
+
+        foreach ($directories as $directory) {
+            if (str_starts_with($path, $root.'/'.trim($directory, '/').'/')) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
      * Every PHP file below the given directories, each file yielded once even when
      * the directories overlap.
+     *
+     * Paths come back resolved ({@see \SplFileInfo::getRealPath()}), while {@see contains()}
+     * compares against an unresolved project root. The two never meet today — this feeds
+     * scanning, that answers containment — and routing a containment test through here would
+     * silently disagree with itself under a symlinked project root.
      *
      * @param  string[]  $directories  relative to the project root
      * @return iterable<string> absolute file paths

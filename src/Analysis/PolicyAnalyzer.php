@@ -42,8 +42,18 @@ class PolicyAnalyzer
     /**
      * @param  string[]  $providerPaths
      */
-    public function __construct(array $providerPaths = ['app/Providers'])
-    {
+    /** @var string[] class-file search roots, relative to the project root */
+    private array $sourcePaths;
+
+    /**
+     * @param  string[]  $providerPaths
+     * @param  string[]  $sourcePaths  class-file search roots, relative to the project root
+     */
+    public function __construct(
+        array $providerPaths = ['app/Providers'],
+        array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS,
+    ) {
+        $this->sourcePaths = $sourcePaths;
         $this->parser = new PhpFileParser;
         $this->finder = new NodeFinder;
         $this->providerPaths = $providerPaths !== [] ? $providerPaths : ['app/Providers'];
@@ -342,11 +352,15 @@ class PolicyAnalyzer
             }
         }
 
+        // Fallback for when no map was supplied: the conventional root-namespace-to-directory
+        // layout, tried against every configured source path.
         $candidates = [];
-        if (str_starts_with($fqcn, 'App\\')) {
-            $candidates[] = 'app/'.str_replace('\\', '/', substr($fqcn, 4)).'.php';
+        foreach (SourceDirectories::resolve($projectRoot, $this->sourcePaths) as $directory) {
+            if (str_starts_with($fqcn, 'App\\')) {
+                $candidates[] = $directory.'/'.str_replace('\\', '/', substr($fqcn, 4)).'.php';
+            }
+            $candidates[] = $directory.'/'.str_replace('\\', '/', $fqcn).'.php';
         }
-        $candidates[] = 'app/'.str_replace('\\', '/', $fqcn).'.php';
         $candidates[] = str_replace('\\', '/', $fqcn).'.php';
 
         foreach ($candidates as $candidate) {

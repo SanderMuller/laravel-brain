@@ -169,6 +169,7 @@ class SecurityAnalyzer
         private array $extraThrottlePatterns = [],
         private array $trustedRouteNames = [],
         private array $trustedRouteUris = [],
+        private array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS,
     ) {
         $this->parser = new PhpFileParser;
         $this->authPatterns = array_values(array_unique(
@@ -567,10 +568,21 @@ class SecurityAnalyzer
             }
         }
 
-        // PSR-4 convention: App\Http\Requests\LoginRequest → app/Http/Requests/LoginRequest.php
-        $candidate = rtrim($this->projectRoot, '/').'/'.str_replace(['App\\', '\\'], ['app/', '/'], ltrim($fqcn, '\\')).'.php';
-        if (is_file($candidate)) {
-            return $candidate;
+        // PSR-4 convention: App\Http\Requests\LoginRequest → app/Http/Requests/LoginRequest.php,
+        // tried against every configured source path rather than `app/` alone.
+        $root = rtrim($this->projectRoot, '/');
+        $relative = str_replace('\\', '/', ltrim($fqcn, '\\')).'.php';
+        $withoutRoot = str_starts_with($fqcn, 'App\\')
+            ? str_replace('\\', '/', substr($fqcn, 4)).'.php'
+            : null;
+
+        foreach (SourceDirectories::resolve($root, $this->sourcePaths) as $directory) {
+            foreach (array_filter([$withoutRoot, $relative]) as $suffix) {
+                $candidate = $root.'/'.$directory.'/'.$suffix;
+                if (is_file($candidate)) {
+                    return $candidate;
+                }
+            }
         }
 
         return null;

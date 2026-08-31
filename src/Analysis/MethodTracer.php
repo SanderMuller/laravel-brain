@@ -82,8 +82,18 @@ class MethodTracer
      * @param  string[]  $extraDispatchHelpers  custom dispatch helpers (e.g. dispatch_with_retries)
      *                                          that wrap a queued job, treated like dispatch().
      */
-    public function __construct(array $extraDispatchHelpers = [])
-    {
+    /** @var string[] class-file search roots, relative to the project root */
+    private array $sourcePaths;
+
+    /**
+     * @param  string[]  $extraDispatchHelpers
+     * @param  string[]  $sourcePaths  class-file search roots, relative to the project root
+     */
+    public function __construct(
+        array $extraDispatchHelpers = [],
+        array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS,
+    ) {
+        $this->sourcePaths = $sourcePaths;
         $this->parser = new PhpFileParser;
         $this->structureInspector = new PhpStructureInspector($this->parser);
         $this->extraDispatchHelpers = array_values(array_filter(
@@ -1195,7 +1205,7 @@ class MethodTracer
         // Fallback: try common locations using full relative path
         if ($this->projectRoot !== '') {
             $relative = str_replace('\\', '/', $fqcn).'.php';
-            foreach (['app/Http/Controllers/', 'app/', 'src/'] as $prefix) {
+            foreach (SourceDirectories::classFilePrefixes($this->projectRoot, $this->sourcePaths) as $prefix) {
                 $path = $this->projectRoot.'/'.$prefix.$relative;
                 if (file_exists($path)) {
                     return $path;
@@ -1217,7 +1227,11 @@ class MethodTracer
 
         $filename = $shortName.'.php';
 
-        return ProjectFileIndex::findFile($this->projectRoot, ['app', 'src'], $filename);
+        return ProjectFileIndex::findFile(
+            $this->projectRoot,
+            SourceDirectories::resolve($this->projectRoot, $this->sourcePaths),
+            $filename,
+        );
     }
 
     private function fallbackEntryMethod(string $fqcn, string $requested, array $methods): string

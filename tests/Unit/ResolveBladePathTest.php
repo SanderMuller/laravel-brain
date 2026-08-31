@@ -2,6 +2,7 @@
 
 declare(strict_types=1);
 
+use LaraMint\LaravelBrain\Analysis\SourceDirectories;
 use LaraMint\LaravelBrain\Graph\GraphBuilder;
 
 function deleteTree(string $dir): void
@@ -102,6 +103,131 @@ it('falls back to scanning Modules/*/resources/views when studly folder name dif
         }
 
         expect($method->invoke($builder, 'blog::home'))->toBe($expected);
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+// ── Ambiguity across configured view roots ────────────────────────────────────
+
+/** @param string[] $viewPaths */
+function resolveBlade(string $projectRoot, array $viewPaths, string $viewDot): ?string
+{
+    SourceDirectories::clear();
+
+    $builder = new GraphBuilder;
+    $builder->setViewPaths($viewPaths);
+
+    $rootProp = new ReflectionProperty(GraphBuilder::class, 'projectRoot');
+    $rootProp->setValue($builder, $projectRoot);
+
+    $method = new ReflectionMethod(GraphBuilder::class, 'resolveBladePath');
+
+    return $method->invoke($builder, $viewDot);
+}
+
+function blade_writeTwoPackages(): string
+{
+    $tmp = sys_get_temp_dir().'/lb_blade_'.bin2hex(random_bytes(6));
+    foreach (['alpha', 'shipping'] as $package) {
+        mkdir($tmp.'/packages/'.$package.'/resources/views/orders', 0o777, true);
+        file_put_contents($tmp.'/packages/'.$package.'/resources/views/orders/index.blade.php', '<div></div>');
+    }
+    mkdir($tmp.'/packages/alpha/resources/views/reports', 0o777, true);
+    file_put_contents($tmp.'/packages/alpha/resources/views/reports/daily.blade.php', '<div></div>');
+
+    return $tmp;
+}
+
+it('resolves a view that only one configured root holds', function () {
+    $tmp = blade_writeTwoPackages();
+
+    try {
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'reports.daily'))
+            ->toBe($tmp.'/packages/alpha/resources/views/reports/daily.blade.php');
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+it('refuses to guess when more than one root holds the same view', function () {
+    $tmp = blade_writeTwoPackages();
+
+    try {
+        // Picking by array order would link `orders.index` to whichever package sorted
+        // first — a confidently wrong edge, which reads worse than a missing one.
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'orders.index'))->toBeNull();
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+it('lets a namespace hint pick the root it names', function () {
+    $tmp = blade_writeTwoPackages();
+
+    try {
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'shipping::orders.index'))
+            ->toBe($tmp.'/packages/shipping/resources/views/orders/index.blade.php');
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+it('takes the package half of a vendor-prefixed namespace hint', function () {
+    $tmp = blade_writeTwoPackages();
+
+    try {
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'acme-shipping::orders.index'))
+            ->toBe($tmp.'/packages/shipping/resources/views/orders/index.blade.php');
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+it('does not accept a root whose name merely starts the hint', function () {
+    $tmp = blade_writeTwoPackages();
+
+    try {
+        // `alpha` must not answer for `alpha-pro`.
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'alpha-pro::orders.index'))->toBeNull();
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+/** Two roots a substring test cannot tell apart: `alpha` is contained in both names. */
+function blade_writeSimilarlyNamedPackages(): string
+{
+    $tmp = sys_get_temp_dir().'/lb_blade_'.bin2hex(random_bytes(6));
+
+    foreach (['alpha', 'alpha-pro'] as $package) {
+        mkdir($tmp.'/packages/'.$package.'/resources/views/orders', 0o777, true);
+        file_put_contents($tmp.'/packages/'.$package.'/resources/views/orders/index.blade.php', '<div></div>');
+    }
+
+    return $tmp;
+}
+
+it('matches a hint against whole path segments, not a substring of the root', function () {
+    $tmp = blade_writeSimilarlyNamedPackages();
+
+    try {
+        // The discriminating direction: a substring test says `alpha` names BOTH roots, so
+        // it cannot pick one and the view goes unresolved. Whole-segment matching names
+        // exactly the root called `alpha`, and the hint does its job.
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'alpha::orders.index'))
+            ->toBe($tmp.'/packages/alpha/resources/views/orders/index.blade.php');
+    } finally {
+        deleteTree($tmp);
+    }
+});
+
+it('still resolves a hinted view when only one root holds it at all', function () {
+    $tmp = blade_writeTwoPackages();
+
+    try {
+        expect(resolveBlade($tmp, ['packages/*/resources/views'], 'nobody::reports.daily'))
+            ->toBe($tmp.'/packages/alpha/resources/views/reports/daily.blade.php');
     } finally {
         deleteTree($tmp);
     }

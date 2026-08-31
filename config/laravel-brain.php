@@ -403,6 +403,62 @@ return [
     ],
 
     // -------------------------------------------------------------------------
+    // Source Paths
+    // -------------------------------------------------------------------------
+    // Directories holding application classes. Two things use them.
+    //
+    // The first is the last-resort file lookup: when Composer's PSR-4 map cannot place
+    // a class name, Brain falls back to searching these directories by file name. The
+    // map handles the normal case, so this only fires for a class the map does not
+    // cover — but when it fires against the wrong directories it finds nothing.
+    //
+    // The second is watch mode: a change confined to these directories can be handled
+    // by a scoped rescan, while a change anywhere else (routes, config) forces a full
+    // rebuild.
+    //
+    // Glob patterns are expanded, so an application whose code lives in packages says:
+    //
+    //   'source_paths' => ['app-modules/*/src'],
+    //
+    'source_paths' => [
+        'app',
+        'src',
+    ],
+
+    // -------------------------------------------------------------------------
+    // Watch Paths
+    // -------------------------------------------------------------------------
+    // Directories polled by `brain:scan --watch` and hashed into the build fingerprint
+    // that decides whether a rescan is needed at all. Anything that can change the
+    // graph belongs here — application code, route files, configuration.
+    //
+    // Glob patterns are expanded:
+    //
+    //   'watch_paths' => ['app-modules', 'config'],
+    //
+    'watch_paths' => [
+        'app',
+        'routes',
+        'config',
+    ],
+
+    // -------------------------------------------------------------------------
+    // Blade View Paths
+    // -------------------------------------------------------------------------
+    // Directories scanned for Blade templates, used to link a view to the views it
+    // includes or renders as a component, and to resolve a view name to its file.
+    //
+    // Glob patterns are expanded:
+    //
+    //   'views' => ['paths' => ['resources/views', 'app-modules/*/resources/views']],
+    //
+    'views' => [
+        'paths' => [
+            'resources/views',
+        ],
+    ],
+
+    // -------------------------------------------------------------------------
     // Livewire Component Search Paths
     // -------------------------------------------------------------------------
     // Directories (relative to project root) that are searched when resolving

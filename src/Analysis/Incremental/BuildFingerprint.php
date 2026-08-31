@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis\Incremental;
 
+use LaraMint\LaravelBrain\Analysis\SourceDirectories;
+
 /**
  * Per-file content fingerprints for a build, used to decide which files changed between
  * two analyze() runs. Keyed by absolute path → a content hash (not mtime: mtime is
@@ -23,14 +25,14 @@ final class BuildFingerprint
     /**
      * Fingerprint every PHP file under the given roots (relative to $projectRoot).
      *
-     * @param  string[]  $relativeRoots  e.g. ['app', 'routes', 'config']
+     * @param  string[]  $relativeRoots  e.g. ['app', 'routes', 'config']; glob patterns are expanded
      */
-    public static function capture(string $projectRoot, array $relativeRoots = ['app', 'routes', 'config']): self
+    public static function capture(string $projectRoot, array $relativeRoots = IncrementalAnalyzer::DEFAULT_ROOTS): self
     {
         $projectRoot = rtrim($projectRoot, '/');
         $files = [];
 
-        foreach ($relativeRoots as $rel) {
+        foreach (SourceDirectories::resolve($projectRoot, $relativeRoots) as $rel) {
             $base = $projectRoot.'/'.$rel;
             if (! is_dir($base)) {
                 continue;

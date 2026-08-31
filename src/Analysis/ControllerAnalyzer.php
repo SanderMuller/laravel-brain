@@ -50,8 +50,15 @@ class ControllerAnalyzer
 
     private array $psr4Map = [];
 
-    public function __construct()
+    /** @var string[] class-file search roots, relative to the project root */
+    private array $sourcePaths;
+
+    /**
+     * @param  string[]  $sourcePaths  class-file search roots, relative to the project root
+     */
+    public function __construct(array $sourcePaths = SourceDirectories::DEFAULT_SOURCE_PATHS)
     {
+        $this->sourcePaths = $sourcePaths;
         $this->parser = new PhpFileParser;
     }
 
@@ -534,7 +541,7 @@ class ControllerAnalyzer
 
         // Fallback: try common locations using full relative path
         $relative = str_replace('\\', '/', $fqcn).'.php';
-        foreach (['app/Http/Controllers/', 'app/', 'src/'] as $prefix) {
+        foreach (SourceDirectories::classFilePrefixes($projectRoot, $this->sourcePaths) as $prefix) {
             $path = $projectRoot.'/'.$prefix.$relative;
             if (file_exists($path)) {
                 return $path;
@@ -553,7 +560,7 @@ class ControllerAnalyzer
 
         $filename = $shortName.'.php';
 
-        $searchDirs = ['app', 'src'];
+        $searchDirs = SourceDirectories::resolve($projectRoot, $this->sourcePaths);
 
         // Also search Modules/ for nwidart-style module controllers
         $modulesDir = $projectRoot.'/Modules';

@@ -284,6 +284,32 @@ From each controller action (and Filament page method), the tracer follows:
 
 This produces the full edge list used to build the graph.
 
+### Blade views
+
+Templates are scanned to link a view to the views it `@include`s or renders as a component, and a view name is resolved back to its file the same way. Both read the same list, so an application that keeps templates in packages points them there once:
+
+```php
+// config/laravel-brain.php
+'views' => [
+    'paths' => ['resources/views', 'app-modules/*/resources/views'],
+],
+```
+
+An include is linked when the template exists under *any* configured root, so one package rendering another's partial is still an edge.
+
+### Source paths and watch mode
+
+Two lists drive everything that is not an analyzer of its own:
+
+```php
+'source_paths' => ['app', 'src'],              // where application classes live
+'watch_paths'  => ['app', 'routes', 'config'], // what can change the graph
+```
+
+`source_paths` backs the last-resort file lookup — the by-file-name search Brain falls back to when Composer's PSR-4 map cannot place a class name — and marks the part of the tree a scoped rescan may be limited to.
+
+`watch_paths` is what `brain:scan --watch` polls and what the build fingerprint hashes. A change confined to `source_paths` can be handled by a scoped rescan; a change anywhere else — a route file, a config file — forces a full rebuild.
+
 ### Service providers and facades
 
 Container registrations (`bind()`, `singleton()`, `scoped()` and their `*If` variants, plus the `$bindings` property) are read from service providers, and application-level facades — classes whose inheritance chain reaches `Illuminate\Support\Facades\Facade` — from the application's source tree. Both feed the graph: an edge that lands on an interface or an abstract class is wired through to the concrete class bound to it, and a facade call is wired through to the class behind its accessor.

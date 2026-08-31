@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace LaraMint\LaravelBrain\Commands;
 
 use Illuminate\Console\Command;
+use LaraMint\LaravelBrain\Analysis\Incremental\IncrementalAnalyzer;
 use LaraMint\LaravelBrain\Analysis\Incremental\ScopedRebuildNotApplicable;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
+use LaraMint\LaravelBrain\Analysis\SourceDirectories;
 use LaraMint\LaravelBrain\Graph\Graph;
 use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
@@ -116,11 +118,41 @@ class ScanCommand extends Command
         return self::SUCCESS; // @phpstan-ignore-line
     }
 
+    /**
+     * Directories polled for changes. Everything that can change the graph belongs here —
+     * application code, route files, configuration.
+     *
+     * @return string[]
+     */
+    private function watchPaths(): array
+    {
+        $paths = config('laravel-brain.watch_paths', IncrementalAnalyzer::DEFAULT_ROOTS);
+
+        return is_array($paths) && $paths !== [] ? $paths : IncrementalAnalyzer::DEFAULT_ROOTS;
+    }
+
+    /**
+     * The subset of the watched tree a scoped rescan may be limited to: application code.
+     * A change in routes or configuration can rewrite the graph from the top.
+     *
+     * @return string[]
+     */
+    private function sourcePaths(): array
+    {
+        $paths = config('laravel-brain.source_paths', SourceDirectories::DEFAULT_SOURCE_PATHS);
+
+        return is_array($paths) && $paths !== [] ? $paths : SourceDirectories::DEFAULT_SOURCE_PATHS;
+    }
+
     private function collectMtimes(string $projectPath): array
     {
+        // A poll is exactly when a directory may have appeared, so the resolved-directory
+        // memo cannot be carried across one.
+        SourceDirectories::clear();
+
         $mtimes = [];
 
-        foreach (['app', 'routes', 'config'] as $dir) {
+        foreach (SourceDirectories::resolve($projectPath, $this->watchPaths()) as $dir) {
             $base = $projectPath.'/'.$dir;
             if (! is_dir($base)) {
                 continue;
@@ -146,8 +178,8 @@ class ScanCommand extends Command
      *
      * A scoped rescan reuses the previous graph's edges wholesale, so it holds only while the
      * shape of the project is unchanged: a file appearing or disappearing can move the route
-     * table or reachability, and anything outside `app/` — routes, config — can rewrite the
-     * graph from the top. Those cases are not worth reasoning about incrementally.
+     * table or reachability, and anything outside the source paths — routes, config — can
+     * rewrite the graph from the top. Those cases are not worth reasoning about incrementally.
      *
      * @param  array<string, int>  $old
      * @param  array<string, int>  $new
@@ -167,7 +199,7 @@ class ScanCommand extends Command
             // Anchored at the project root: a substring test calls every file "in app/" when
             // the project itself lives under a directory of that name, which would let a routes
             // change take the scoped path and leave watch showing the previous graph.
-            if (! str_starts_with($path, rtrim($projectPath, '/').'/app/')) {
+            if (! SourceDirectories::contains($projectPath, SourceDirectories::resolve($projectPath, $this->sourcePaths()), $path)) {
                 return null;
             }
             $modified[] = $path;
