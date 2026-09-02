@@ -39,9 +39,9 @@ takes a few seconds once the applications have been generated.
 
 The application is synthetic and deliberately awkward: a service, repository and
 model layer shared by many entry points, chains four deep, classes with private
-helpers and call-free getters, and two application facades so the facade scan
-is not idle. It is a workload, not an average app, so read the absolute times
-as such.
+helpers and call-free getters, two application facades, and a framework facade
+import on almost every class so the prefilter has something to skip. It is a
+workload, not an average app, so read the absolute times as such.
 
 ## Reading the two kinds of number
 

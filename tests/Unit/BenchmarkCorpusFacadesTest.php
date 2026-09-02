@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use LaraMint\LaravelBrain\Analysis\FacadeAnalyzer;
 use LaraMint\LaravelBrain\Analysis\FacadeRecord;
+use LaraMint\LaravelBrain\Parser\PhpFileParser;
 
 function removeBenchmarkCorpus(string $dir): void
 {
@@ -43,7 +44,32 @@ it('generates an ordinary facade and one whose own file never mentions Facade', 
     expect((string) file_get_contents($root.'/app/Http/Controllers/Controller001.php'))
         ->toContain('\\App\\Support\\Reporting::handle0');
 
+    $appFiles = 0;
+    $frameworkFacadeImports = 0;
+    $bareFacadeHits = 0;
+    $it = new RecursiveIteratorIterator(
+        new RecursiveDirectoryIterator($root.'/app', FilesystemIterator::SKIP_DOTS),
+    );
+    foreach ($it as $file) {
+        if ($file->getExtension() !== 'php') {
+            continue;
+        }
+        $appFiles++;
+        $code = (string) file_get_contents($file->getPathname());
+        if (str_contains($code, 'Illuminate\\Support\\Facades\\')) {
+            $frameworkFacadeImports++;
+        }
+        if (str_contains(str_replace('Facades\\', '', $code), 'Facade')) {
+            $bareFacadeHits++;
+        }
+    }
+
+    expect($frameworkFacadeImports)->toBeGreaterThan((int) ($appFiles * 0.9));
+    expect($bareFacadeHits)->toBeLessThan(10);
+
+    $before = PhpFileParser::$parseCount;
     $registry = (new FacadeAnalyzer)->analyze($root);
+    $parses = PhpFileParser::$parseCount - $before;
 
     expect($registry->get('App\Facades\Catalog'))
         ->toBeInstanceOf(FacadeRecord::class)
@@ -56,6 +82,7 @@ it('generates an ordinary facade and one whose own file never mentions Facade', 
         ->concreteFqcn->toBe('App\Services\Service001');
 
     expect($registry->get('App\Support\Facades\Base'))->toBeNull();
+    expect($parses)->toBeLessThan(10);
 
     removeBenchmarkCorpus($root);
 });

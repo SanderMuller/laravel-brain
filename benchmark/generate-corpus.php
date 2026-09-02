@@ -16,6 +16,8 @@ declare(strict_types=1);
  *   - two application facades (unscaled), so the facade scan is not idle: one
  *     ordinary `extends Facade`, and one child that never names Facade, reaching
  *     the base through an app-level parent. A controller calls each.
+ *   - a framework facade import on almost every class (`Log`, `Cache`, `DB`, …),
+ *     which is the shape the prefilter has to skip
  *
  * Output is byte-identical for a given scale — there is no randomness — so both
  * arms of a comparison can scan the same generated tree.
@@ -67,6 +69,19 @@ function put(string $path, string $contents): void
     file_put_contents($path, $contents);
 }
 
+/**
+ * Most files in a Laravel application import a framework facade. The facade
+ * prefilter has to skip `Facades\` so those imports are not treated as
+ * definitions. Without this line the generated tree cannot catch a regression
+ * of that skip: almost nothing under app/ mentioned Facade at all.
+ */
+function frameworkFacadeImport(int $i): string
+{
+    $names = ['Log', 'Cache', 'DB', 'Auth', 'Session', 'Storage'];
+
+    return 'use Illuminate\\Support\\Facades\\'.$names[$i % count($names)].';';
+}
+
 rmrf($outDir);
 mkdir($outDir, 0755, true);
 
@@ -106,12 +121,14 @@ for ($i = 0; $i < $counts['models']; $i++) {
     $name = 'Model'.$pad($i);
     $rel1 = 'Model'.$pad(($i + 1) % $counts['models']);
     $rel2 = 'Model'.$pad(($i + 2) % $counts['models']);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Models/$name.php", <<<PHP
 <?php
 
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Model;
+$fw
 
 class $name extends Model
 {
@@ -138,10 +155,13 @@ PHP);
 // ─── events ──────────────────────────────────────────────────────────────────
 for ($i = 0; $i < $counts['events']; $i++) {
     $name = 'Event'.$pad($i);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Events/$name.php", <<<PHP
 <?php
 
 namespace App\Events;
+
+$fw
 
 class $name
 {
@@ -164,10 +184,13 @@ for ($i = 0; $i < $counts['repositories']; $i++) {
 M;
     }
     $body = implode("\n\n", $body);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Repositories/$name.php", <<<PHP
 <?php
 
 namespace App\Repositories;
+
+$fw
 
 class $name
 {
@@ -199,6 +222,7 @@ M;
     }
 M;
     $methods = implode("\n\n", $methods);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Services/$name.php", <<<PHP
 <?php
 
@@ -206,6 +230,7 @@ namespace App\Services;
 
 use App\Services\\$svcDep;
 use App\Repositories\\$repoDep;
+$fw
 
 class $name
 {
@@ -246,6 +271,7 @@ M;
         $routeLines[$bucket][] = "Route::$verb('/$name/$action/{id}', [\\App\\Http\\Controllers\\$name::class, '$action']);";
     }
     $methods = implode("\n\n", $methods);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Http/Controllers/$name.php", <<<PHP
 <?php
 
@@ -253,6 +279,7 @@ namespace App\Http\Controllers;
 
 use App\Services\\$svcDep;
 use App\Services\\$svcDep2;
+$fw
 
 class $name
 {
@@ -272,6 +299,7 @@ for ($i = 0; $i < $counts['jobs']; $i++) {
     $svcDep = $svc($i);
     $calls = $bodyCalls($i * 11, 4);
     $calls2 = $bodyCalls($i * 11 + 3, 3);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Jobs/$name.php", <<<PHP
 <?php
 
@@ -280,6 +308,7 @@ namespace App\Jobs;
 use App\Services\\$svcDep;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
+$fw
 
 class $name implements ShouldQueue
 {
@@ -311,12 +340,14 @@ for ($i = 0; $i < $counts['listeners']; $i++) {
     $name = 'Listener'.$pad($i);
     $svcDep = $svc($i + 4);
     $calls = $bodyCalls($i * 13, 4);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Listeners/$name.php", <<<PHP
 <?php
 
 namespace App\Listeners;
 
 use App\Services\\$svcDep;
+$fw
 
 class $name
 {
@@ -335,6 +366,7 @@ for ($i = 0; $i < $counts['commands']; $i++) {
     $name = 'Command'.$pad($i);
     $svcDep = $svc($i + 6);
     $calls = $bodyCalls($i * 17, 5);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Console/Commands/$name.php", <<<PHP
 <?php
 
@@ -342,6 +374,7 @@ namespace App\Console\Commands;
 
 use App\Services\\$svcDep;
 use Illuminate\Console\Command;
+$fw
 
 class $name extends Command
 {
@@ -364,6 +397,7 @@ for ($i = 0; $i < $counts['middleware']; $i++) {
     $name = 'Middleware'.$pad($i);
     $svcDep = $svc($i + 8);
     $calls = $bodyCalls($i * 19, 3);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Http/Middleware/$name.php", <<<PHP
 <?php
 
@@ -371,6 +405,7 @@ namespace App\Http\Middleware;
 
 use App\Services\\$svcDep;
 use Closure;
+$fw
 
 class $name
 {
@@ -407,6 +442,7 @@ M;
     }
 M;
     $methods = implode("\n\n", $methods);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Livewire/$name.php", <<<PHP
 <?php
 
@@ -414,6 +450,7 @@ namespace App\Livewire;
 
 use App\Services\\$svcDep;
 use Livewire\Component;
+$fw
 
 class $name extends Component
 {
@@ -434,12 +471,14 @@ for ($i = 0; $i < $counts['observers']; $i++) {
     $name = 'Observer'.$pad($i);
     $svcDep = $svc($i + 12);
     $calls = $bodyCalls($i * 29, 3);
+    $fw = frameworkFacadeImport($i);
     put("$outDir/app/Observers/$name.php", <<<PHP
 <?php
 
 namespace App\Observers;
 
 use App\Services\\$svcDep;
+$fw
 
 class $name
 {
