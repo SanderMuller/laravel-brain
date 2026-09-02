@@ -13,6 +13,9 @@ declare(strict_types=1);
  *   - entry classes (jobs, listeners, commands, middleware, Livewire
  *     components, observers) with several methods each, including private
  *     helpers and call-free getters
+ *   - two application facades (unscaled), so the facade scan is not idle: one
+ *     ordinary `extends Facade`, and one child that never names Facade, reaching
+ *     the base through an app-level parent. A controller calls each.
  *
  * Output is byte-identical for a given scale — there is no randomness — so both
  * arms of a comparison can scan the same generated tree.
@@ -226,6 +229,11 @@ for ($i = 0; $i < $counts['controllers']; $i++) {
     $actions = ['index', 'show', 'store', 'update'];
     foreach ($actions as $ai => $action) {
         $calls = $bodyCalls($i * 5 + $ai, 4);
+        if ($i === 0 && $action === 'index') {
+            $calls .= "\n        \\App\\Facades\\Catalog::handle0(\$id);";
+        } elseif ($i === 1 && $action === 'index') {
+            $calls .= "\n        \\App\\Support\\Reporting::handle0(\$id);";
+        }
         $methods[] = <<<M
     public function $action(int \$id)
     {
@@ -450,6 +458,54 @@ $calls
 PHP);
 }
 
+// ─── application facades (unscaled) ───────────────────────────────────────────
+// Two concrete facades, three files. The count is fixed so a larger scale does
+// not invent more of them; one of each shape is enough for the facade scan to
+// run its second pass and for a missed resolution to drop a graph edge.
+put("$outDir/app/Facades/Catalog.php", <<<'PHP'
+<?php
+
+namespace App\Facades;
+
+use Illuminate\Support\Facades\Facade;
+
+class Catalog extends Facade
+{
+    protected static function getFacadeAccessor()
+    {
+        return \App\Services\Service000::class;
+    }
+}
+PHP);
+
+put("$outDir/app/Support/Facades/Base.php", <<<'PHP'
+<?php
+
+namespace App\Support\Facades;
+
+use Illuminate\Support\Facades\Facade;
+
+abstract class Base extends Facade
+{
+    protected static function getFacadeAccessor()
+    {
+        return \App\Services\Service001::class;
+    }
+}
+PHP);
+
+put("$outDir/app/Support/Reporting.php", <<<'PHP'
+<?php
+
+namespace App\Support;
+
+use App\Support\Facades\Base;
+
+class Reporting extends Base
+{
+}
+PHP);
+
 // ─── routes ────────────────────────────────────────────────────────────────────
 $webRoutes = "<?php\n\nuse Illuminate\\Support\\Facades\\Route;\n\n".implode("\n", $routeLines['web'])."\n";
 $apiRoutes = "<?php\n\nuse Illuminate\\Support\\Facades\\Route;\n\n".implode("\n", $routeLines['api'])."\n";
@@ -489,4 +545,5 @@ fwrite(STDERR, "Generated corpus at $outDir (scale $scale)\n");
 foreach ($counts as $k => $v) {
     fwrite(STDERR, sprintf("  %-14s %d\n", $k, $v));
 }
+fwrite(STDERR, "  facades        2 (plus 1 abstract base, unscaled)\n");
 fwrite(STDERR, "  TOTAL classes ≈ $total, php files under app/ = $files\n");
