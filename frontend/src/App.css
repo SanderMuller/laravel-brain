@@ -1589,7 +1589,7 @@ body::before {
   display: flex;
   justify-content: center;
   margin-bottom: 24px;
-  filter: drop-shadow(0 0 20px rgba(124, 58, 237, 0.4));
+  filter: drop-shadow(0 0 20px rgba(239, 59, 45, 0.25));
 }
 
 .welcome-icon img {

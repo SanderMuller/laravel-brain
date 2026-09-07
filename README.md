@@ -1,5 +1,8 @@
 <p align="center">
-  <img src="art/banner.png" alt="Laravel Brain" width="300px"/>
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="art/laravel-brain-mark.png"/>
+    <img src="art/banner.png" alt="Laravel Brain" width="300px"/>
+  </picture>
 </p>
 
 <p align="center">
