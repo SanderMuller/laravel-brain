@@ -69,8 +69,8 @@ class BrainController extends Controller
 
     public function scan(Request $request): JsonResponse
     {
-        ini_set('memory_limit', '1024M');
-        set_time_limit(300);
+        ini_set('memory_limit', (string) config('laravel-brain.memory_limit', '1024M'));
+        set_time_limit((int) config('laravel-brain.execution_time_limit', 300));
 
         $projectPath = base_path();
         $analyzer = new ProjectAnalyzer;

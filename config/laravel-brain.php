@@ -79,6 +79,24 @@ return [
     'memory_limit' => env('LARAVEL_BRAIN_MEMORY_LIMIT', '1024M'),
 
     // -------------------------------------------------------------------------
+    // Execution Time Limit
+    // -------------------------------------------------------------------------
+    // Seconds the web-triggered scan (the "Rescan" button in the viewer) is allowed to
+    // run before PHP kills it, applied via set_time_limit() before analysis starts. Set
+    // to 0 for no limit — the same meaning PHP itself gives that value.
+    //
+    // A large application (thousands of routes, tens of thousands of call edges) can
+    // take longer than the default on modest hardware; raise this rather than hitting
+    // a silent cutoff partway through.
+    //
+    // `php artisan brain:scan` (the CLI command) is not affected — the CLI SAPI has no
+    // execution time limit by default, so there is nothing here for it to override.
+    //
+    // Override via the LARAVEL_BRAIN_EXECUTION_TIME_LIMIT env variable.
+    //
+    'execution_time_limit' => env('LARAVEL_BRAIN_EXECUTION_TIME_LIMIT', 300),
+
+    // -------------------------------------------------------------------------
     // Auto-Discover Routes
     // -------------------------------------------------------------------------
     // When true, RouteAnalyzer skips AST parsing of route_paths and instead
