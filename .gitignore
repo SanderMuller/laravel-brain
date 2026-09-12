@@ -9,3 +9,4 @@ public/index.html
 docs/.vitepress/cache/
 docs/.vitepress/dist/
 .DS_Store
+mutate3.py
