@@ -234,3 +234,64 @@ class Importer
 
     exec('rm -rf '.escapeshellarg($root));
 });
+
+it('resolves a method-level dependency injected into an Artisan Command handle()', function () {
+    // traceMethod() is the entry point Commands go through, and unlike trace() (controllers)
+    // it only ever fed scanMethod() the class's constructor deps — a handle(Service $service)
+    // parameter had nowhere to be recorded, so $service->sync() traced nowhere.
+    $root = sameNsProject([
+        'Services/OrderService.php' => '<?php
+namespace App\Services;
+
+class OrderService
+{
+    public function sync(): void {}
+}',
+        'Console/Commands/SyncOrders.php' => '<?php
+namespace App\Console\Commands;
+
+use App\Services\OrderService;
+use Illuminate\Console\Command;
+
+class SyncOrders extends Command
+{
+    public function handle(OrderService $service): void
+    {
+        $service->sync();
+    }
+}',
+    ]);
+
+    $edges = (new MethodTracer)->traceMethod('App\Console\Commands\SyncOrders', 'handle', ['App\\' => [$root.'/app']], $root);
+
+    expect(array_map(fn ($e) => $e->calleeFqcn.'::'.$e->calleeMethod, $edges))
+        ->toContain('App\Services\OrderService::sync');
+
+    exec('rm -rf '.escapeshellarg($root));
+});
+
+it('does not trace a Console Command self-call to its own inherited I/O methods', function () {
+    // $this->warn() resolves to the command's own fqcn, same as any other self-call — nothing
+    // before this fix distinguished "declared on this class" from "inherited from Command",
+    // so it classified as a self-referencing service hop.
+    $root = sameNsProject([
+        'Console/Commands/Greet.php' => '<?php
+namespace App\Console\Commands;
+
+use Illuminate\Console\Command;
+
+class Greet extends Command
+{
+    public function handle(): void
+    {
+        $this->warn("hello");
+    }
+}',
+    ]);
+
+    $edges = (new MethodTracer)->traceMethod('App\Console\Commands\Greet', 'handle', ['App\\' => [$root.'/app']], $root);
+
+    expect($edges)->toBeEmpty();
+
+    exec('rm -rf '.escapeshellarg($root));
+});

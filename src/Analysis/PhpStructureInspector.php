@@ -408,7 +408,10 @@ class PhpStructureInspector
         return $this->printer ??= new PrettyPrinter;
     }
 
-    public function listClassMethods(string $file): array
+    /**
+     * @return list<array{name: string, static: bool, visibility: string, params: list<array{name: string, type: ?string}>, returnType: ?string}>
+     */
+    public function listClassMethods(string $file, bool $includePrivate = false): array
     {
         if (! is_file($file)) {
             return [];
@@ -420,13 +423,13 @@ class PhpStructureInspector
 
         $out = [];
         $traverser = new NodeTraverser;
-        $visitor = new class($out) extends NodeVisitorAbstract
+        $visitor = new class($out, $includePrivate) extends NodeVisitorAbstract
         {
             /**
-             * @param  list<array{name: string, static: bool, visibility: string}>  $out
+             * @param  list<array{name: string, static: bool, visibility: string, params: list<array{name: string, type: ?string}>, returnType: ?string}>  $out
              */
             // @phpstan-ignore-next-line property.onlyWritten
-            public function __construct(private array &$out) {}
+            public function __construct(private array &$out, private bool $includePrivate) {}
 
             public function enterNode(Node $node): ?int
             {
@@ -442,17 +445,64 @@ class PhpStructureInspector
                         continue;
                     }
                     $vis = $stmt->isPrivate() ? 'private' : ($stmt->isProtected() ? 'protected' : 'public');
-                    if ($vis === 'private') {
+                    if ($vis === 'private' && ! $this->includePrivate) {
                         continue;
                     }
                     $this->out[] = [
                         'name' => $name,
                         'static' => $stmt->isStatic(),
                         'visibility' => $vis,
+                        'params' => $this->paramSignatures($stmt->params),
+                        'returnType' => $this->resolveType($stmt->returnType),
                     ];
                 }
 
                 return NodeVisitor::STOP_TRAVERSAL;
+            }
+
+            /**
+             * @param  Node\Param[]  $params
+             * @return list<array{name: string, type: ?string}>
+             */
+            private function paramSignatures(array $params): array
+            {
+                $out = [];
+                foreach ($params as $param) {
+                    $out[] = [
+                        'name' => $param->var instanceof Node\Expr\Variable && is_string($param->var->name)
+                            ? $param->var->name
+                            : '',
+                        'type' => $this->resolveType($param->type),
+                    ];
+                }
+
+                return $out;
+            }
+
+            /**
+             * Class names resolve to their imported FQCN; builtin/scalar hints (int, array,
+             * self, void, ...) are PHP-Parser Identifier nodes, not Name nodes, and are
+             * returned as written. Union/intersection types are rare enough on the kind of
+             * signature this renders (public API of an app service) to leave unresolved.
+             */
+            private function resolveType(?Node $type): ?string
+            {
+                if ($type === null) {
+                    return null;
+                }
+                if ($type instanceof Node\Name) {
+                    return PhpFileParser::resolvedName($type) ?? $type->toString();
+                }
+                if ($type instanceof Node\Identifier) {
+                    return $type->toString();
+                }
+                if ($type instanceof Node\NullableType) {
+                    $inner = $this->resolveType($type->type);
+
+                    return $inner !== null ? '?'.$inner : null;
+                }
+
+                return null;
             }
         };
         $traverser->addVisitor($visitor);

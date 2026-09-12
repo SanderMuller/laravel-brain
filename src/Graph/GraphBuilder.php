@@ -834,6 +834,29 @@ class GraphBuilder
     }
 
     /**
+     * Resolve one method's flow steps without a full build() pass — backs the "show me this
+     * method's flow" endpoint, where the method may never have been reached by any traced call
+     * chain at all (an uncalled method sitting in an otherwise-normal service class).
+     *
+     * @return array{flowSteps: array<int, array<string, mixed>>, declaringFqcn: string}|null
+     */
+    public function resolveMethodFlow(string $fqcn, string $method, string $projectRoot): ?array
+    {
+        $this->psr4Map = $this->buildFullPsr4Map($projectRoot);
+        $this->projectRoot = $projectRoot;
+
+        $location = $this->findMethodNodeInChain($fqcn, $method);
+        if ($location === null) {
+            return null;
+        }
+
+        return [
+            'flowSteps' => $this->flowExtractor->extract($location['methodNode'], $location['useMap']),
+            'declaringFqcn' => $location['declaringFqcn'],
+        ];
+    }
+
+    /**
      * Every distinct cache operation a flow performs, in the order the source performs them.
      *
      * @param  array[]  $steps
@@ -1162,6 +1185,9 @@ class GraphBuilder
     ): void {
         $short = class_basename($fqcn);
         $file = $this->resolveFile($fqcn);
+        $members = ($file !== '' && is_file($file))
+            ? $this->getStructureInspector()->listClassMethods($file, includePrivate: true)
+            : [];
         $methodLocation = $this->findMethodNodeInChain($fqcn, $method);
         $flowSteps = $methodLocation !== null
             ? $this->flowExtractor->extract($methodLocation['methodNode'], $methodLocation['useMap'])
@@ -1173,6 +1199,7 @@ class GraphBuilder
             'method' => $method,
             'subtype' => $dataSubtype,
             'file' => $file,
+            'members' => $members,
             'flowSteps' => $flowSteps,
             'visibility' => $this->extractVisibility($fqcn, $method),
             ...($svcMetrics ? ['metrics' => $svcMetrics] : []),

@@ -812,6 +812,10 @@ class ProjectAnalyzer
             $eventFacts->stamp($fullGraph);
         }
 
+        // Unconditional and after every edge-adding pass: "is this method called from anywhere"
+        // is only answerable once every edge in the final graph exists.
+        MemberInvocationFacts::stamp($fullGraph);
+
         // After every node-adding pass (including stampJobGroupRegions(), the last of them) and
         // after the incremental merge above, so every node in the final $fullGraph — freshly
         // built or carried over from a scoped rebuild — gets a churn stamp; before the split,

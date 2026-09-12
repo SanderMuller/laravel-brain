@@ -604,6 +604,30 @@ body::before {
 .structure-flag, .structure-vis, .structure-decl { font-size: 10px; color: var(--dim); }
 .structure-decl { margin-left: 6px; font-style: italic; }
 
+.sidebar-structure-group { margin-bottom: 10px; }
+.sidebar-structure-group:last-child { margin-bottom: 0; }
+.structure-group-label {
+  font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--dim); margin: 0 0 4px;
+}
+.sidebar-member-item {
+  display: flex; flex-wrap: wrap; gap: 4px 8px; align-items: baseline;
+  padding: 5px 0; border-bottom: 1px solid var(--border);
+  width: 100%; text-align: left; font: inherit; color: inherit;
+  background: none; border-left: none; border-right: none; border-top: none;
+  cursor: pointer;
+}
+.sidebar-structure-list li:last-child .sidebar-member-item { border-bottom: none; }
+.sidebar-member-item:hover { background: var(--accent-soft); }
+.member-signature { font-family: ui-monospace, monospace; color: var(--text); font-size: 12px; }
+.member-invoked-badge, .member-uncalled-badge {
+  font-size: 9px; font-weight: 600; letter-spacing: 0.04em;
+  padding: 1px 4px; border-radius: 3px; white-space: nowrap;
+}
+.member-invoked-badge { background: rgba(70, 201, 139, 0.15); color: var(--ok); }
+.member-uncalled-badge { background: rgba(255,255,255,0.06); color: var(--dim); }
+.member-loading-flow { font-size: 10px; color: var(--dim); font-style: italic; }
+
 .prop-row {
   display: flex;
   gap: 8px;

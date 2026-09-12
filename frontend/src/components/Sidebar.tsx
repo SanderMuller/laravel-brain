@@ -12,6 +12,7 @@ import { SequenceDiagramView } from './SequenceDiagramView'
 import { SequenceDiagramModal } from './SequenceDiagramModal'
 import { buildSequenceDiagram } from '../utils/sequenceUtils'
 import { Tooltip } from './Tooltip'
+import { useMethodFlow } from '../hooks/useMethodFlow'
 
 const MIN_WIDTH = 360
 const MAX_WIDTH = 640
@@ -92,6 +93,28 @@ function formatRows(rows: number | null, estimated: boolean): string {
 
   return `${estimated ? '~' : ''}${rows.toLocaleString('en-US')}`
 }
+
+/** A service member as its own PHP-ish signature: `sync(?string $tag): array`. */
+function formatMemberSignature(member: Record<string, unknown>): string {
+  const name = String(member.name ?? '')
+  const params = Array.isArray(member.params) ? (member.params as Array<Record<string, unknown>>) : []
+  const paramList = params
+    .map((p) => {
+      const pName = String(p.name ?? '')
+      const pType = typeof p.type === 'string' ? p.type : null
+      return pType ? `${pType} $${pName}` : `$${pName}`
+    })
+    .join(', ')
+  const returnType = typeof member.returnType === 'string' ? member.returnType : null
+
+  return `${name}(${paramList})${returnType ? `: ${returnType}` : ''}`
+}
+
+const MEMBER_VISIBILITY_GROUPS: Array<{ key: string; label: string }> = [
+  { key: 'public', label: 'Public' },
+  { key: 'protected', label: 'Protected' },
+  { key: 'private', label: 'Private' },
+]
 /**
  * What each cache kind means, for people who have not internalised which Laravel method does
  * what. `remember` reading rather than writing is the one that surprises everybody.
@@ -182,6 +205,7 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
   const [isSeqModalOpen, setIsSeqModalOpen] = useState(false)
   const [aiCopied, setAiCopied] = useState(false)
   const [aiLoading, setAiLoading] = useState(false)
+  const [selectedMember, setSelectedMember] = useState<{ fqcn: string; method: string; label: string } | null>(null)
 
   // Reset tab + modal state when selection changes (avoids Effect cascading render)
   const [prevSelectedId, setPrevSelectedId] = useState(selectedId)
@@ -193,7 +217,10 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
     setIsSeqModalOpen(false)
     setAiCopied(false)
     setAiLoading(false)
+    setSelectedMember(null)
   }
+
+  const memberFlow = useMethodFlow(selectedMember?.fqcn ?? null, selectedMember?.method ?? null)
 
   const nodeMap = useMemo(() => {
     const map = new Map<string, GraphNode>()
@@ -323,6 +350,9 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
     : []
 
   const structureMembers = (node.data?.members ?? []) as Array<Record<string, unknown>>
+  const isServiceInspector = node.type === 'service' && structureMembers.length > 0
+  const serviceFqcn = String(node.data?.fqcn ?? '')
+  const serviceShortName = serviceFqcn.split('\\').pop() ?? serviceFqcn
 
   const validationRules = (node.data?.validationRules ?? []) as Array<{ field: string; rules: string }>
 
@@ -943,7 +973,57 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                 </div>
               )}
 
-              {structureMembers.length > 0 && (
+              {isServiceInspector ? (
+                <div className="sidebar-section">
+                  <h3>Structure</h3>
+                  {MEMBER_VISIBILITY_GROUPS.map(({ key, label }) => {
+                    const members = structureMembers.filter((m) => m.visibility === key)
+                    if (members.length === 0) return null
+
+                    return (
+                      <div key={key} className="sidebar-structure-group">
+                        <p className="structure-group-label">{label}</p>
+                        <ul className="sidebar-structure-list">
+                          {members.map((m, i) => {
+                            const methodName = String(m.name ?? '')
+                            const isSelected = selectedMember?.fqcn === serviceFqcn && selectedMember?.method === methodName
+                            const isLoadingThis = isSelected && memberFlow.loading
+
+                            return (
+                              <li key={i}>
+                                <button
+                                  type="button"
+                                  className="sidebar-member-item"
+                                  onClick={() =>
+                                    setSelectedMember({
+                                      fqcn: serviceFqcn,
+                                      method: methodName,
+                                      label: `${serviceShortName}@${methodName}`,
+                                    })
+                                  }
+                                >
+                                  <span className="member-signature">{formatMemberSignature(m)}</span>
+                                  {m.static === true && <span className="structure-flag">static</span>}
+                                  {isLoadingThis ? (
+                                    <span className="member-loading-flow">loading flow…</span>
+                                  ) : (
+                                    <span className={m.invoked ? 'member-invoked-badge' : 'member-uncalled-badge'}>
+                                      {m.invoked ? 'called' : 'uncalled'}
+                                    </span>
+                                  )}
+                                  {isSelected && memberFlow.error && (
+                                    <span className="member-loading-flow">{memberFlow.error}</span>
+                                  )}
+                                </button>
+                              </li>
+                            )
+                          })}
+                        </ul>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : structureMembers.length > 0 && (
                 <div className="sidebar-section">
                   <h3>Structure</h3>
                   <ul className="sidebar-structure-list">
@@ -965,6 +1045,14 @@ export function Sidebar({ selectedId, graphData, theme, onClose, onStressChange 
                     ))}
                   </ul>
                 </div>
+              )}
+
+              {selectedMember && !memberFlow.loading && memberFlow.data && (
+                <FlowchartModal
+                  steps={memberFlow.data.flowSteps}
+                  title={selectedMember.label}
+                  onClose={() => setSelectedMember(null)}
+                />
               )}
 
               {tableStats && (

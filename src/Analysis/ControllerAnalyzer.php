@@ -343,24 +343,7 @@ class ControllerAnalyzer
 
             private function extractTypedParams(array $params): array
             {
-                $deps = [];
-                foreach ($params as $param) {
-                    if (! $param instanceof Node\Param) {
-                        continue;
-                    }
-                    $varName = $param->var instanceof Node\Expr\Variable ? $param->var->name : null;
-                    $type = $param->type;
-                    if ($varName === null || $type === null) {
-                        continue;
-                    }
-
-                    $typeName = $this->resolveType($type);
-                    if ($typeName) {
-                        $deps[(string) $varName] = $typeName;
-                    }
-                }
-
-                return $deps;
+                return TypedParamExtractor::extract($params, fn (Node $type): ?string => $this->resolveType($type));
             }
 
             private function extractVisibility(Node\Stmt\ClassMethod $node): string

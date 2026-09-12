@@ -12,6 +12,7 @@ Route::prefix('_laravel-brain')->group(function () {
     Route::get('/api/stress-test/{jobId}', [BrainController::class, 'stressTestPoll']);
     Route::get('/api/context', [BrainController::class, 'context']);
     Route::get('/api/usages', [BrainController::class, 'usages']);
+    Route::get('/api/method-flow', [BrainController::class, 'methodFlow']);
     Route::post('/api/generate-rules', [BrainController::class, 'generateRules'])->middleware(EnsureRequestIsSameOrigin::class);
     Route::get('/{any?}', [BrainController::class, 'serve'])->where('any', '.*');
 });

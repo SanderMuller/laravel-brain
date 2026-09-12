@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace LaraMint\LaravelBrain\Analysis;
 
+use Illuminate\Console\Command;
 use LaraMint\LaravelBrain\Parser\PhpExtendsFqcnResolver;
 use LaraMint\LaravelBrain\Parser\PhpFileParser;
 use PhpParser\Node;
@@ -338,7 +339,7 @@ class MethodTracer
 
         $discovered = $this->scanMethod(
             $methodAst,
-            $classInfo['deps'],
+            array_merge($classInfo['deps'], $classInfo['methodDeps'][$method] ?? []),
             $classInfo['useMap'],
             $fqcn,
             $classInfo['parent'] ?? null,
@@ -820,6 +821,17 @@ class MethodTracer
                     return;
                 }
 
+                // $this->warn(), $this->table(), etc. — Console\Command's own inherited API,
+                // not an application dependency. Self-calls resolve to the enclosing class's own
+                // fqcn regardless of where the method is actually declared, so this is caught by
+                // name against the base class's real method list rather than by classification.
+                if ($fqcn === $this->currentFqcn
+                    && $this->parentFqcn === 'Illuminate\\Console\\Command'
+                    && isset(MethodTracer::consoleCommandMethodNames()[$method])
+                ) {
+                    return;
+                }
+
                 if ($this->looksLikeModel($fqcn)) {
                     $this->hops[] = ['fqcn' => $fqcn, 'method' => $method, 'type' => 'model', 'visibility' => 'public'];
                 } elseif (! $this->isFrameworkClass($fqcn)) {
@@ -1200,7 +1212,8 @@ class MethodTracer
 
     /**
      * Load a class by FQCN, parse it, and return:
-     *   [ 'methods' => [name => ClassMethod], 'deps' => [prop => FQCN], 'useMap' => [...] ]
+     *   [ 'methods' => [name => ClassMethod], 'deps' => [prop => FQCN], 'useMap' => [...],
+     *     'methodDeps' => [methodName => [varName => FQCN]], 'parent' => ?FQCN ]
      */
     private function loadClass(string $fqcn): ?array
     {
@@ -1228,6 +1241,8 @@ class MethodTracer
         {
             public array $constructorDeps = []; // varName/prop => FQCN
 
+            public array $methodDeps = [];        // methodName => [varName => FQCN]
+
             public array $methods = [];          // methodName => ClassMethod
 
             public array $useMap = [];
@@ -1247,18 +1262,12 @@ class MethodTracer
                 if ($node instanceof Node\Stmt\ClassMethod) {
                     $name = $node->name->toString();
 
-                    // Extract typed params
-                    $deps = [];
-                    foreach ($node->params as $param) {
-                        $varName = $param->var instanceof Node\Expr\Variable ? $param->var->name : null;
-                        if (! is_string($varName)) {
-                            continue;
-                        }
-                        $typeName = $this->resolveType($param->type);
-                        if ($typeName) {
-                            $deps[$varName] = $typeName;
-                        }
-                    }
+                    // Extract typed params — kept for every method, not just __construct, so an
+                    // entry point's own signature (e.g. a Command's handle()) can be merged in by
+                    // the caller; see traceDeep()'s scanMethod() call.
+                    $deps = TypedParamExtractor::extract($node->params, fn (Node $type): ?string => $this->resolveType($type));
+
+                    $this->methodDeps[$name] = $deps;
 
                     if ($name === '__construct') {
                         $this->constructorDeps = $deps;
@@ -1302,6 +1311,15 @@ class MethodTracer
             $deps[$var] = $useMap[$short] ?? $short;
         }
 
+        $methodDeps = [];
+        foreach ($visitor->methodDeps as $methodName => $rawDeps) {
+            $resolved = [];
+            foreach ($rawDeps as $var => $short) {
+                $resolved[$var] = $useMap[$short] ?? $short;
+            }
+            $methodDeps[$methodName] = $resolved;
+        }
+
         $parentFqcn = PhpExtendsFqcnResolver::resolveExtends(
             $visitor->extendsNode,
             $fileNamespace,
@@ -1312,6 +1330,7 @@ class MethodTracer
             'methods' => $visitor->methods,
             'deps' => $deps,
             'useMap' => $useMap,
+            'methodDeps' => $methodDeps,
             'parent' => $parentFqcn,
         ];
 
@@ -1394,6 +1413,37 @@ class MethodTracer
     public function releaseClassCache(): void
     {
         $this->classCache = [];
+    }
+
+    /** @var array<string, true>|null */
+    private static ?array $consoleCommandMethodNames = null;
+
+    /**
+     * Illuminate\Console\Command's own public instance methods, read via reflection so this
+     * stays correct for whatever Laravel version the scanned app has installed rather than
+     * drifting from a hand-maintained list — the same "ask the running framework" precedent
+     * used for morph map aliases (see MorphMap::fromApplication()). Degrades to empty rather
+     * than failing the scan if reflection is ever unavailable.
+     *
+     * @return array<string, true>
+     */
+    public static function consoleCommandMethodNames(): array
+    {
+        if (self::$consoleCommandMethodNames !== null) {
+            return self::$consoleCommandMethodNames;
+        }
+
+        try {
+            $methods = (new \ReflectionClass(Command::class))
+                ->getMethods(\ReflectionMethod::IS_PUBLIC);
+        } catch (\Throwable) {
+            return self::$consoleCommandMethodNames = [];
+        }
+
+        return self::$consoleCommandMethodNames = array_fill_keys(
+            array_map(static fn (\ReflectionMethod $m): string => $m->getName(), $methods),
+            true,
+        );
     }
 
     public function looksLikeMail(string $class): bool

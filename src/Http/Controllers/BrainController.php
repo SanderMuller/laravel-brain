@@ -14,6 +14,7 @@ use LaraMint\LaravelBrain\Ai\UsageFinder;
 use LaraMint\LaravelBrain\Analysis\GitHistoryInspector;
 use LaraMint\LaravelBrain\Analysis\ProjectAnalyzer;
 use LaraMint\LaravelBrain\Analysis\RouteAnalyzer;
+use LaraMint\LaravelBrain\Graph\GraphBuilder;
 use LaraMint\LaravelBrain\Storage\GraphStoreFactory;
 
 class BrainController extends Controller
@@ -172,6 +173,31 @@ class BrainController extends Controller
 
         if ($result === null) {
             return response()->json(['error' => "Node not found: {$nodeId}"], 404);
+        }
+
+        return response()->json($result);
+    }
+
+    // ── Method flow (on demand) ───────────────────────────────────────────────
+
+    /**
+     * A method's flow chart, resolved fresh rather than read off the last scan — so a method
+     * the Service Inspector lists but that no traced call chain ever reached still has
+     * something to show when clicked.
+     */
+    public function methodFlow(Request $request): JsonResponse
+    {
+        $fqcn = (string) $request->query('fqcn', '');
+        $method = (string) $request->query('method', '');
+
+        if ($fqcn === '' || $method === '') {
+            return response()->json(['error' => 'fqcn and method are required'], 422);
+        }
+
+        $result = (new GraphBuilder)->resolveMethodFlow($fqcn, $method, base_path());
+
+        if ($result === null) {
+            return response()->json(['error' => "Method not found: {$fqcn}::{$method}"], 404);
         }
 
         return response()->json($result);
