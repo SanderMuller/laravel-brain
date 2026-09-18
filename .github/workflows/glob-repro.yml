@@ -1,0 +1,32 @@
+name: GLOB_BRACE repro (#139)
+
+on:
+  push:
+    branches: [repro/glob-brace-139]
+
+jobs:
+  repro:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: As shipped
+        run: |
+          for img in php:8.2-cli-alpine php:8.3-cli-alpine php:8.4-cli-alpine php:8.5-cli-alpine php:8.4-cli php:8.5-cli; do
+            printf '%-24s' "$img"
+            docker run --rm -v "$PWD:/w" -w /w "$img" php .github/glob-repro.php 2>&1 | tail -1
+          done
+
+      - name: Apply the proposed guard
+        run: |
+          sed -i "s/GLOB_ONLYDIR | GLOB_BRACE/GLOB_ONLYDIR | (defined('GLOB_BRACE') ? GLOB_BRACE : 0)/" src/Analysis/SourceDirectories.php
+          # fail loudly rather than silently re-testing the unpatched file
+          grep -q "defined('GLOB_BRACE')" src/Analysis/SourceDirectories.php || { echo "sed did not apply"; exit 1; }
+          grep -n GLOB_BRACE src/Analysis/SourceDirectories.php
+
+      - name: With the guard
+        run: |
+          for img in php:8.2-cli-alpine php:8.3-cli-alpine php:8.4-cli-alpine php:8.5-cli-alpine php:8.4-cli; do
+            printf '%-24s' "$img"
+            docker run --rm -v "$PWD:/w" -w /w "$img" php .github/glob-repro.php 2>&1 | tail -1
+          done
