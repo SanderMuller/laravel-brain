@@ -87,7 +87,7 @@ final class EntryPointInventory
                 // signature, and the command it points at is already its own entry point.
                 fqcn: $schedule->type === 'job' ? $schedule->target : '',
                 file: $schedule->file,
-                nodeIds: ['schedule::'.md5($schedule->type.$schedule->target.$schedule->frequency)],
+                nodeIds: [$schedule->nodeId()],
                 detail: $schedule->type,
             );
         }
