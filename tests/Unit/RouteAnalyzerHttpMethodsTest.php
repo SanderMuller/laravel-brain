@@ -131,8 +131,9 @@ it('carries QUERY and OPTIONS through live-router discovery', function () {
     $container->instance(Router::class, $router);
 
     try {
-        // `Route::query()` does not exist on this version, but `match()` hands its verbs to
-        // addRoute() without checking them against Router::$verbs, so a QUERY route registers.
+        // `Route::query()` exists only from Laravel 13.35, but `match()` hands its verbs to
+        // addRoute() without checking them against Router::$verbs, so a QUERY route registers on
+        // every version.
         $router->match(['QUERY'], '/search', [SearchController::class, 'search']);
         $router->options('/preflight', [SearchController::class, 'preflight']);
 
