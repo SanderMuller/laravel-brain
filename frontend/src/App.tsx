@@ -9,7 +9,7 @@ import { Sidebar } from './components/Sidebar'
 import { Toolbar } from './components/Toolbar'
 import { LeftSidebar } from './components/LeftSidebar'
 import type { TabEntry } from './types/graph'
-import { NODE_TYPES } from './utils/graphConstants'
+import { NODE_TYPES, isNodeTypeShown } from './utils/graphConstants'
 import { Tooltip } from './components/Tooltip'
 import { membershipsOf } from './utils/graphRegions'
 import './App.css'
@@ -163,7 +163,7 @@ export default function App() {
 
   const visibleNodeCount = useMemo(() => {
     if (!tabState.data) return 0
-    return tabState.data.nodes.filter((n) => visibleTypes.has(n.type)).length
+    return tabState.data.nodes.filter((n) => isNodeTypeShown(n.type, visibleTypes)).length
   }, [tabState.data, visibleTypes])
 
   const toggleType = useCallback((type: string) => {

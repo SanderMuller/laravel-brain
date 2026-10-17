@@ -66,15 +66,15 @@ export const PACKET_ANIMATION_THRESHOLD = 40
  * list, here, so the filter's rows and its default selection cannot disagree, and see
  * `isNodeTypeShown` for the next type that is added on the PHP side only.
  */
-export const NODE_TYPES: GraphNode['type'][] = [
+export const NODE_TYPES: readonly GraphNode['type'][] = [
   'route', 'middleware', 'controller', 'livewire_component', 'action', 'action_class', 'service',
   'repository', 'validation_request', 'model', 'observer', 'policy', 'event', 'listener', 'job',
   'command', 'channel', 'schedule', 'view', 'mail', 'notification', 'resource', 'enum',
   'interface', 'trait', 'abstract_class', 'service_provider', 'facade', 'ai_agent', 'ai_tool',
   'filament_panel', 'filament_resource', 'filament_page',
   'filament_page_method', 'filament_widget', 'filament_relation_manager',
-  // The inventory's own kinds. A type left out of the visible set has no visible edges, so
-  // folding a group would find no children to fold.
+  // The inventory's own kinds, listed so each gets a filter row. Switching one off hides its
+  // edges too, so folding a group then finds no children to fold.
   'entry_point', 'entry_point_group', 'unreached_class', 'unreached_group',
   'macro', 'macro_group',
 ]
@@ -88,9 +88,10 @@ const FILTERABLE_NODE_TYPES: ReadonlySet<string> = new Set(NODE_TYPES)
  * back. A missing colour only falls back to the default; a missing row used to hide the node.
  */
 export function isNodeTypeShown(type: unknown, visibleTypes: ReadonlySet<string>): boolean {
-  const name = String(type)
+  // No type at all, as for an edge whose endpoint is not in the tab, stays hidden as before.
+  if (typeof type !== 'string') return false
 
-  return visibleTypes.has(name) || !FILTERABLE_NODE_TYPES.has(name)
+  return visibleTypes.has(type) || !FILTERABLE_NODE_TYPES.has(type)
 }
 
 export const ACCENT_COLORS: Record<string, string> = {
@@ -170,7 +171,7 @@ export const ACCENT_COLORS_LIGHT: Record<string, string> = {
   abstract_class: '#64748b',
   service_provider: '#a16207',
   facade:     '#00838f',
-  observer:   '#b91c1c',
+  observer:   '#9f1239',
   policy:     '#047857',
   resource:   '#4338ca',
   repository: '#5e35b1',
