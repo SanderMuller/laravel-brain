@@ -40,10 +40,14 @@ export function useTabGraph(): UseTabGraphResult {
   // Cache loaded tabs so switching back is instant
   const cache = useRef<Map<string, GraphData>>(new Map())
   const currentFile = useRef<string | null>(null)
+  // Only the latest request may change the state. An older fetch, even for the same file, still
+  // fills the cache, but its result or error never replaces what a newer request shows.
+  const latestRequest = useRef(0)
 
   const load = useCallback((file: string) => {
     if (currentFile.current === file) return
     currentFile.current = file
+    const request = ++latestRequest.current
 
     // Return cached immediately
     const cached = cache.current.get(file)
@@ -61,13 +65,12 @@ export function useTabGraph(): UseTabGraphResult {
       })
       .then((data: GraphData) => {
         cache.current.set(file, data)
-        // Only apply if this file is still the active one
-        if (currentFile.current === file) {
+        if (latestRequest.current === request) {
           setState({ status: 'ready', file, data })
         }
       })
       .catch((e: Error) => {
-        if (currentFile.current === file) {
+        if (latestRequest.current === request) {
           // Forget the file, so asking for it again fetches it again instead of keeping the error.
           currentFile.current = null
           setState({ status: 'error', file, error: e.message })
@@ -75,7 +78,8 @@ export function useTabGraph(): UseTabGraphResult {
       })
   }, [])
 
-  const elements = useMemo(() => (state.status === 'ready' ? toElements(state.data) : []), [state])
+  const readyData = state.status === 'ready' ? state.data : null
+  const elements = useMemo(() => (readyData ? toElements(readyData) : []), [readyData])
 
   return { state, elements, load }
 }
