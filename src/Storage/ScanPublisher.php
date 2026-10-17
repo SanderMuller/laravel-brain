@@ -27,10 +27,7 @@ final class ScanPublisher
     {
         $store->ensureSchema();
 
-        $store->putManifest(self::decorateManifest(
-            $manifestJson,
-            $store->hasManifest() ? $store->getManifest() : null,
-        ));
+        $store->putManifest(self::decorateManifest($manifestJson, $store->getManifest()));
 
         foreach ($subgraphs as $tabId => $subgraph) {
             $store->putSubgraph((string) $tabId, $subgraph->toJson());
